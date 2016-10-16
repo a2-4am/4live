@@ -1,0 +1,8 @@
+;
+; 4LIVE
+; a 4am & san inc hack
+;
+!cpu 6502
+*=$8000
+;
+        rts
