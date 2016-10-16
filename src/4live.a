@@ -5,4 +5,44 @@
 !cpu 6502
 *=$8000
 ;
+!addr   KSWL            = $38
+!addr   RECONNECTDOS    = $3EA
+!addr   WARMDOS         = $3D0
+!addr   KBD             = $C000
+!addr   STROBE          = $C010
+!addr   COUT            = $FDED
+
+        HOTKEY          = $80           ; CTRL-@
+
+;
+
+        ldy     #0
+-       lda     _WelcomeMessage,y
+        beq     +
+        ora     #$80
+        jsr     COUT
+        iny
+        bne     -
++       jsr     Install
+        jmp     WARMDOS
+
+_WelcomeMessage
+        !text   $8D, "4LIVE READY. PRESS CTRL-@ TO ACTIVATE.", $8D, 0
+
+Install
+        lda     #<GlobalKeyboardHook
+        sta     KSWL
+        lda     #>GlobalKeyboardHook
+        sta     KSWL+1
+        jmp     RECONNECTDOS
+
+GlobalKeyboardHook
+-       lda     KBD
+        bpl     -
+        bit     STROBE
+        cmp     #HOTKEY
+        beq     +
         rts
++
+        jsr     $FC58
+        jmp     GlobalKeyboardHook
