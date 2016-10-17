@@ -1,0 +1,33 @@
+4live
+a 4am & san inc hack
+
+v1 design notes:
+
+global hotkey (Ctrl-@) to enter 4live
+
+40x23 editing space for notes (full 40-column text screen, minus a 1-row status bar)
+
+immediately in editing/notetaking mode -- no separate command mode (think Emacs, not vi)
+
+initial cursor position is top-left corner, but
+*** remember cursor position across reboot *** (must persist on disk along with contents)
+
+editor is always in overstrike mode (there is no insert mode)
+- so no way to insert lines (!)
+
+editor keyboard commands
+- left/right/up/down arrows - free movement around 40x23 editing space
+- <Return> - move cursor to first column of next row, with wrap around to first row
+- <Esc> - close editor, return to reality
+- <Ctrl-@) - same as <Esc>
+- <Ctrl-S> - save notes to disk
+
+non-goals (for v1)
+- inverse text
+- flashing text
+- auto-right-justified text
+- auto-center-justified text
+- convenience functions ("draw a line of hyphens")
+- insert row
+- scrolling (more than 23 lines)
+- paging (multiple "screens")
