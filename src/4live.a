@@ -4,45 +4,207 @@
 ;
 !cpu 6502
 *=$8000
+!to "a4live#068000",plain
 ;
+!addr   CH              = $24
+!addr   CV              = $25
+!addr   GBASL           = $26
+!addr   GBASH           = $27
+!addr   BASL            = $28
+!addr   BASH            = $29
+!addr   BAS2L           = $2A
+!addr   BAS2H           = $2B
 !addr   KSWL            = $38
+!addr   KSWH            = $39
 !addr   RECONNECTDOS    = $3EA
 !addr   WARMDOS         = $3D0
 !addr   KBD             = $C000
 !addr   STROBE          = $C010
+!addr   BASCALC         = $FBC1
+!addr   SCROLL          = $FC70
+!addr   WAIT            = $FCA8
+!addr   KEYIN           = $FD1B
 !addr   COUT            = $FDED
 
+;private arbitrary addresses
+!addr   tmpl            = $3E
+!addr   tmph            = $3F
+!addr   line            = $40
+!addr   myCH            = $41
+!addr   myCV            = $42
+
         HOTKEY          = $80           ; CTRL-@
+
+;constants
+        RETURN          = $8D
+        WIDTH           = 40
+        HEIGHT          = 24
 
 ;
 
         ldy     #0
--       lda     _WelcomeMessage,y
+        sty     myCH
+        sty     myCV
         beq     +
-        ora     #$80
-        jsr     COUT
-        iny
+-       jsr     COUT
++       iny
+        lda     _WelcomeMessage-1,y
         bne     -
-+       jsr     Install
+        jsr     Install
         jmp     WARMDOS
 
 _WelcomeMessage
-        !text   $8D, "4LIVE READY. PRESS CTRL-@ TO ACTIVATE.", $8D, 0
+        !scrxor $80, $8D, "4LIVE READY. PRESS CTRL-", $C0, " TO ACTIVATE.", $8D, 0
 
 Install
         lda     #<GlobalKeyboardHook
         sta     KSWL
         lda     #>GlobalKeyboardHook
-        sta     KSWL+1
+        sta     KSWH
         jmp     RECONNECTDOS
 
 GlobalKeyboardHook
--       lda     KBD
-        bpl     -
-        bit     STROBE
+        jsr     KEYIN
         cmp     #HOTKEY
         beq     +
         rts
-+
-        jsr     $FC58
+
++       jsr     SwitchScreens
+        jsr     EditorMode
+        jsr     SwitchScreens
+
+        ;support enhanced flashing cursor with current character toggle, if available
+
+        ldy     CH
+        lda     (BASL), y
         jmp     GlobalKeyboardHook
+
+SwitchScreens
+        jsr     SwapCoords
+
+        ;copy first line of physical screen to first line of virtual screen
+
+        lda     #HEIGHT
+        sta     line
+--      ldy     #WIDTH - 1
+-       lda     $400, y
+        sta     firstline, y
+        dey
+        bpl     -
+
+        ;scroll up physical screen
+
+        jsr     SCROLL
+
+        ;append line from virtual screen
+
+        ldy     #WIDTH - 1
+-       lda     lastline, y
+        sta     $7d0, y
+        dey
+        bpl     -
+
+        ;scroll down virtual screen
+
+        jsr     vscroll
+
+        ;animate it just for fun
+
+        jsr     Delay
+        dec     line
+        bne     --
+        rts
+
+        ;scroll HEIGHT lines
+
+vscroll
+        lda     #<(lastline-WIDTH)
+        sta     GBASL
+        lda     #>(lastline-WIDTH)
+        sta     GBASH
+        lda     #<lastline
+        sta     BAS2L
+        lda     #>lastline
+        sta     BAS2H
+        ldx     #HEIGHT
+--      ldy     #WIDTH - 1
+-       lda     (GBASL), y
+        sta     (BAS2L), y
+        dey
+        bpl     -
+        sec
+        lda     GBASL
+        sbc     #WIDTH
+        sta     GBASL
+        bcs     +
+        dec     GBASH
+        sec
++       lda     BAS2L
+        sbc     #WIDTH
+        sta     BAS2L
+        bcs     +
+        dec     BAS2H
++       dex
+        bne     --
+
+ReuseReturn
+        rts
+
+Delay
+        ldy     #5
+-       lda     #0
+        jsr     WAIT
+        dey
+        bne     -
+        rts
+
+        ;swap real X/Y with virtual X/Y
+        ;and recalculate screen position
+
+SwapCoords
+        ldx     CH
+        lda     myCH
+        stx     myCH
+        sta     CH
+
+        ldy     CV
+        lda     myCV
+        sty     myCV
+        sta     CV
+        jmp     BASCALC
+
+EditorMode
+        ldy     CH
+        lda     (BASL), y
+        jsr     KEYIN
+        cmp     #HOTKEY
+        beq     ReuseReturn
+        cmp     #RETURN
+        bne     +
+        ldy     CV
+        cpy     #HEIGHT - 1
+        beq     EditorMode
++       jsr     COUT
+        jmp     EditorMode
+
+firstline
+        ;pre-screen line to catch scroll
+        !fill WIDTH, $A0
+
+        ;we reserve one line for status
+vscrn
+status
+        !text "CTRL+("
+        !scrxor $80, "L"
+        !text ")OAD ("
+        !scrxor $80, "S"
+        !text ")AVE ("
+        !scrxor $80, "^"
+        !text ")SCREENSHOT "
+        !scrxor $80, "4LIVE-1"
+
+        ;not the full $400 to save memory
+        !fill WIDTH * (HEIGHT - 2), $A0
+
+lastline
+        !fill WIDTH, $A0
