@@ -532,11 +532,15 @@ FirstLine
 
         ;we reserve one line for status
 
-        !text   "CTRL+("
+        !scrxor $40, "CTRL"
+        !text   "+("
         !scrxor $40, IMPORTKEY
-        !text   ")MPORT ("
+        !text   ")"
+        !scrxor $40, "MPORT"
+        !text   " ("
         !scrxor $40, SAVEKEY
-        !text   ")AVE"
+        !text   ")"
+        !scrxor $40, "AVE"
         !text   "             "
         !scrxor $80, "4LIVE-1"
 
