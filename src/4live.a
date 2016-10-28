@@ -4,7 +4,7 @@
 ;
 !cpu 6502
 *=$8000
-!to "_4live#068000", plain
+
 ;
 !addr   WNDLFT          = $20
 !addr   WNDWDTH         = $21
@@ -56,7 +56,11 @@
         SAVEKEY         = $93           ; CTRL-S
 
 ;constants
+        LTARROW         = $88
+        UPARROW         = $8B
         RETURN          = $8D
+        RTARROW         = $95
+        ESC             = $9B
         WIDTH           = 40
         HEIGHT          = 24
         IOBSLOT         = 1
@@ -308,17 +312,54 @@ EditorMode
         jsr     KEYIN
         cmp     #HOTKEY
         beq     KeyRet
+        cmp     #ESC
+        beq     KeyRet
         cmp     #SAVEKEY
         beq     SaveFile
         cmp     #IMPORTKEY
         beq     ImportScreen
+        cmp     #LTARROW
+        beq     LineLeft
+        cmp     #UPARROW
+        beq     LineUp
+        cmp     #RTARROW
+        beq     LineRight
+
+OutChar
         jsr     COUT
         lda     CV
         eor     #(HEIGHT - 1)           ;zero on match
         bne     EditorMode
+
+SetRow
         sta     CV
+
+SetRow1
+        lda     CV
         jsr     BASCALC
         bcc     EditorMode              ;always
+
+LineLeft
+        dec     CH
+        bpl     SetRow1
+        lda     #(WIDTH - 1)
+
+SetColumn
+        sta     CH
+        bpl     SetRow1                 ;always
+
+LineUp
+        dec     CV
+        bpl     SetRow1
+        lda     #(HEIGHT - 2)
+        bne     SetRow                  ;always
+
+LineRight
+        inc     CH
+        lda     CH
+        eor     #WIDTH                  ;zero on match
+        bne     SetRow1
+        beq     SetColumn               ;always
 
 ImportScreen
         lda     #<(FirstLine + WIDTH)
