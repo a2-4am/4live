@@ -28,6 +28,8 @@
 !addr   GETPARM         = $3DC
 !addr   KBD             = $C000
 !addr   STROBE          = $C010
+!addr   ROMIN           = $C081
+!addr   LCBANK2         = $C083
 !addr   GBASCALC        = $F847
 !addr   BASCALC         = $FBC1
 !addr   SCROLL          = $FC70
@@ -72,7 +74,7 @@
         NAMELEN         = 30
         CREATEFILE      = 0
         OPENEXISTING    = 1
-        SPECIAL         = 16
+        SPECIAL         = 8
         CMDOPEN         = 1
         CMDCLOSE        = 2
         CMDREAD         = 3
@@ -88,7 +90,18 @@ Install
         ldy     #0
         sty     DOSBUFL
         lda     DOSBASE
-        sta     DOSBUFH
+
+        ;check for DiversiDOS
+
+        cmp     #$BF
+        bne     +
+        lda     LCBANK2
+        lda     LCBANK2
+        lda     #$DD
+
+        ;back to regular DOS
+
++       sta     DOSBUFH
         !byte   $2C ;mask LDY
 -       ldy     #NEXTFILE
         lda     (DOSBUFL), y
@@ -154,6 +167,8 @@ Install
         ;switch to write mode for future accesses
 
         inc     ReadWriteCmd            ;lda WRITECMD / sta ReadWriteCmd
+
+        lda     ROMIN
 
         ;display the welcome message, now that we're finally done
 
@@ -388,6 +403,8 @@ ImportScreen
         bmi     EditorMode
 
 OpenReadFile
+        lda     LCBANK2
+        lda     LCBANK2                 ;support DiversiDOS
         jsr     GETIOB
         sty     OPSRCL
         sta     OPSRCH
@@ -427,6 +444,7 @@ CloseMLI_b
         !byte   CMDCLOSE
 CloseMLI_e
 OpenRet
+        lda     ROMIN
         rts
 
 OpenCommon
