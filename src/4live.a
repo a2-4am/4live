@@ -283,12 +283,8 @@ VirtScroll
         rts
 
 Delay
-        ldy     #5
-        lda     #0
--       jsr     WAIT
-        dey
-        bne     -
-        rts
+        lda     #1
+        jmp     WAIT
 
         ;swap real X/Y with virtual X/Y
         ;and recalculate screen position
