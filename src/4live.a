@@ -4,8 +4,12 @@
 ;
 !cpu 6502
 *=$8000
-!to "a4live#068000",plain
+!to "_4live#068000", plain
 ;
+!addr   WNDLFT          = $20
+!addr   WNDWDTH         = $21
+!addr   WNDTOP          = $22
+!addr   WNDBTM          = $23
 !addr   CH              = $24
 !addr   CV              = $25
 !addr   GBASL           = $26
@@ -16,10 +20,15 @@
 !addr   BAS2H           = $2B
 !addr   KSWL            = $38
 !addr   KSWH            = $39
+!addr   GETIOB          = $3E3
 !addr   RECONNECTDOS    = $3EA
 !addr   WARMDOS         = $3D0
+!addr   DOSBASE         = $3D2
+!addr   FILEMAN         = $3D6
+!addr   GETPARM         = $3DC
 !addr   KBD             = $C000
 !addr   STROBE          = $C010
+!addr   GBASCALC        = $F847
 !addr   BASCALC         = $FBC1
 !addr   SCROLL          = $FC70
 !addr   WAIT            = $FCA8
@@ -27,57 +36,157 @@
 !addr   COUT            = $FDED
 
 ;private arbitrary addresses
-!addr   tmpl            = $3E
-!addr   tmph            = $3F
-!addr   line            = $40
-!addr   myCH            = $41
-!addr   myCV            = $42
+!addr   MANPARML        = $40
+!addr   MANPARMH        = $41
+!addr   DOSBUFL         = $42
+!addr   DOSBUFH         = $43
+!addr   ADDRESSL        = $44
+!addr   ADDRESSH        = $45
+!addr   FILESIZEL       = $46
+!addr   FILESIZEH       = $47
+!addr   OPSRCL          = $48
+!addr   OPSRCH          = $49
+!addr   OPDSTL          = $4a
+!addr   OPDSTH          = $4b
+!addr   LINE            = $4c
+!addr   ANIMATE         = $4d
 
         HOTKEY          = $80           ; CTRL-@
+        IMPORTKEY       = $89           ; CTRL-I
+        SAVEKEY         = $93           ; CTRL-S
 
 ;constants
         RETURN          = $8D
         WIDTH           = 40
         HEIGHT          = 24
+        IOBSLOT         = 1
+        IOBDRIVE        = 2
+        NEXTFILE        = 36
+        PARMRANGE       = 6
+        PARMFILE        = 8
+        PARMWORK        = 12
+        NAMELEN         = 30
+        CREATEFILE      = 0
+        OPENEXISTING    = 1
+        SPECIAL         = 16
+        CMDOPEN         = 1
+        CMDCLOSE        = 2
+        CMDREAD         = 3
+        CMDWRITE        = 4
+        READRANGE       = 2
 
 ;
 
+Install
+
+        ;find a free DOS buffer
+
         ldy     #0
-        sty     myCH
-        sty     myCV
+        sty     DOSBUFL
+        lda     DOSBASE
+        sta     DOSBUFH
+        !byte   $2C ;mask LDY
+-       ldy     #NEXTFILE
+        lda     (DOSBUFL), y
+        tax
+        iny
+        lda     (DOSBUFL), y
+        stx     DOSBUFL
+        sta     DOSBUFH
+
+        ;set filename pointer in MLI request packet
+
+        stx     FileName
+        sta     FileName + 1
+
+        ;check for empty filename (indicates free buffer)
+
+        ldy     #0
+        lda     (DOSBUFL), y
+        bne     -
+
+        ;get file manager parameter list
+
+        jsr     GETPARM
+        sty     MANPARML
+        sta     MANPARMH
+
+        ;copy DOS buffer pointers to file manager parameter list
+
+        lda     #NAMELEN
+        sta     OPDSTL
+        lda     #PARMWORK
+        sta     OPDSTH
+        ldx     #(6 - 1)
+-       ldy     OPDSTL
+        lda     (DOSBUFL), y
+        ldy     OPDSTH
+        sta     (MANPARML), y
+        inc     OPDSTL
+        inc     OPDSTH
+        dex
+        bpl     -
+
+        ;set input name
+
+        ldy     #(NAMELEN - 1)
+        lda     #$A0
+-       cpy     #(FileName_e - FileName_b)
+        bcs     +
+        lda     FileName_b, y
++       sta     (DOSBUFL), y
+        dey
+        bpl     -
+        sty     ANIMATE                 ;enable visible screen-swapping via #$FF
+
+        ;open source file and read it if available
+
+        jsr     OpenReadFile
+        lda     SaveCH
+        sta     MyCH
+        lda     SaveCV
+        sta     MyCV
+
+        ;switch to write mode for future accesses
+
+        inc     ReadWriteCmd            ;lda WRITECMD / sta ReadWriteCmd
+
+        ;display the welcome message, now that we're finally done
+
+        ldy     #0
         beq     +
 -       jsr     COUT
 +       iny
         lda     _WelcomeMessage-1,y
         bne     -
-        jsr     Install
-        jmp     WARMDOS
-
-_WelcomeMessage
-        !scrxor $80, $8D, "4LIVE READY. PRESS CTRL-", $C0, " TO ACTIVATE.", $8D, 0
-
-Install
         lda     #<GlobalKeyboardHook
         sta     KSWL
         lda     #>GlobalKeyboardHook
         sta     KSWH
-        jmp     RECONNECTDOS
+        jsr     RECONNECTDOS
+        jmp     WARMDOS
 
-GlobalKeyboardHook
-        jsr     KEYIN
-        cmp     #HOTKEY
-        beq     +
-        rts
+_WelcomeMessage
+        !scrxor $80, $8D, "4LIVE READY. PRESS CTRL-", HOTKEY + $40, " TO ACTIVATE.", $8D, 0
 
-+       jsr     SwitchScreens
-        jsr     EditorMode
-        jsr     SwitchScreens
+        ;support enhanced flashing cursor while waiting for key, if available
+        ;it works by passing to the routine the character under the cursor
+        ;the ROM toggles between that character and the Delete character
 
-        ;support enhanced flashing cursor with current character toggle, if available
-
+GetKey
         ldy     CH
         lda     (BASL), y
-        jmp     GlobalKeyboardHook
+
+GlobalKeyboardHook
+        ;let DOS handle initial cursor
+
+        jsr     KEYIN
+        cmp     #HOTKEY
+        bne     KeyRet
+        jsr     SwitchScreens
+        jsr     EditorMode
+        jsr     SwitchScreens
+        beq     GetKey                  ;always
 
 SwitchScreens
         jsr     SwapCoords
@@ -85,10 +194,10 @@ SwitchScreens
         ;copy first line of physical screen to first line of virtual screen
 
         lda     #HEIGHT
-        sta     line
---      ldy     #WIDTH - 1
+        sta     LINE
+--      ldy     #(WIDTH - 1)
 -       lda     $400, y
-        sta     firstline, y
+        sta     FirstLine, y
         dey
         bpl     -
 
@@ -98,36 +207,42 @@ SwitchScreens
 
         ;append line from virtual screen
 
-        ldy     #WIDTH - 1
--       lda     lastline, y
-        sta     $7d0, y
+        ldy     #(WIDTH - 1)
+-       lda     LastLine, y
+        sta     $7D0, y
         dey
         bpl     -
 
         ;scroll down virtual screen
 
-        jsr     vscroll
+        jsr     VirtScroll
+
+        lda     ANIMATE
+        beq     +
 
         ;animate it just for fun
 
         jsr     Delay
-        dec     line
+
++       dec     LINE
         bne     --
+
+KeyRet
         rts
 
         ;scroll HEIGHT lines
 
-vscroll
-        lda     #<(lastline-WIDTH)
+VirtScroll
+        lda     #<(LastLine - WIDTH)
         sta     GBASL
-        lda     #>(lastline-WIDTH)
+        lda     #>(LastLine - WIDTH)
         sta     GBASH
-        lda     #<lastline
+        lda     #<LastLine
         sta     BAS2L
-        lda     #>lastline
+        lda     #>LastLine
         sta     BAS2H
         ldx     #HEIGHT
---      ldy     #WIDTH - 1
+--      ldy     #(WIDTH - 1)
 -       lda     (GBASL), y
         sta     (BAS2L), y
         dey
@@ -146,14 +261,12 @@ vscroll
         dec     BAS2H
 +       dex
         bne     --
-
-ReuseReturn
         rts
 
 Delay
         ldy     #5
--       lda     #0
-        jsr     WAIT
+        lda     #0
+-       jsr     WAIT
         dey
         bne     -
         rts
@@ -162,49 +275,220 @@ Delay
         ;and recalculate screen position
 
 SwapCoords
-        ldx     CH
-        lda     myCH
-        stx     myCH
-        sta     CH
-
-        ldy     CV
-        lda     myCV
-        sty     myCV
-        sta     CV
+        ldx     #(6 - 1)
+-       ldy     WNDLFT, x
+        lda     MyWNDLFT, x
+        sta     WNDLFT, x
+        tya
+        sta     MyWNDLFT, x
+        dex
+        bpl     -
         jmp     BASCALC
+
+        ;restore temporarily the original screen
+        ;so that notes are stored together
+
+SaveFile
+        lda     CH
+        sta     SaveCH
+        lda     CV
+        sta     SaveCV
+        inc     ANIMATE                 ;disable animation (was #$FF from above)
+        jsr     SwitchScreens
+        jsr     CreateWriteFile
+        jsr     SwitchScreens
+        dec     ANIMATE                 ;re-enable animation
+
+        ;print anything that isn't a special key
+        ;wrap around screen position when we hit edges
 
 EditorMode
         ldy     CH
         lda     (BASL), y
         jsr     KEYIN
         cmp     #HOTKEY
-        beq     ReuseReturn
-        cmp     #RETURN
-        bne     +
-        ldy     CV
-        cpy     #HEIGHT - 1
-        beq     EditorMode
-+       jsr     COUT
-        jmp     EditorMode
+        beq     KeyRet
+        cmp     #SAVEKEY
+        beq     SaveFile
+        cmp     #IMPORTKEY
+        beq     ImportScreen
+        jsr     COUT
+        lda     CV
+        eor     #(HEIGHT - 1)           ;zero on match
+        bne     EditorMode
+        sta     CV
+        jsr     BASCALC
+        bcc     EditorMode              ;always
 
-firstline
+ImportScreen
+        lda     #<(FirstLine + WIDTH)
+        sta     OPSRCL
+        lda     #>(FirstLine + WIDTH)
+        sta     OPSRCH
+        ldx     #(HEIGHT - 2)
+
+        ;use graphics function to not disturb text state
+
+--      txa
+        jsr     GBASCALC
+        ldy     #(WIDTH - 1)
+-       lda     (OPSRCL), y
+        sta     (GBASL), y
+        dey
+        bpl     -
+        lda     OPSRCL
+        clc
+        adc     #WIDTH
+        sta     OPSRCL
+        bcc     +
+        inc     OPSRCH
++       dex
+        bpl     --
+        bmi     EditorMode
+
+OpenReadFile
+        jsr     GETIOB
+        sty     OPSRCL
+        sta     OPSRCH
+        ldy     #IOBSLOT
+        lda     (OPSRCL), y
+        lsr
+        lsr
+        lsr
+        lsr
+        sta     FileSlot
+        iny                             ;ldy     #IOBDRIVE
+        lda     (OPSRCL), y
+        sta     FileDrive
+        ldx     #OPENEXISTING
+        jsr     OpenCommon
+        bcs     OpenRet
+
+ReadFile
+WriteFile
+        jsr     DOSMLI
+        !byte   ReadMLI_e - ReadMLI_b
+ReadMLI_b
+ReadWriteCmd
+        !byte   CMDREAD
+        !byte   READRANGE
+        !word   0                       ;record number
+        !word   0                       ;offset
+WriteSize
+        !word   -1                      ;number of bytes
+        !word   LoadSaveStart           ;buffer
+ReadMLI_e
+
+CloseFile
+        jsr     DOSMLI
+        !byte   CloseMLI_e - CloseMLI_b
+CloseMLI_b
+        !byte   CMDCLOSE
+CloseMLI_e
+OpenRet
+        rts
+
+OpenCommon
+        jsr     DOSMLI
+        !byte   OpenMLI_e - OpenMLI_b
+OpenMLI_b
+        !byte   CMDOPEN
+        !byte   0                       ;unused
+        !word   0                       ;variable records
+        !byte   0                       ;any volume
+FileDrive
+        !text   "Q"                     ;self-modified
+FileSlot
+        !text   "Q"                     ;self-modified
+        !byte   SPECIAL                 ;file type for when we save
+FileName
+        !text   "4s"                    ;self-modified
+OpenMLI_e
+        rts
+
+CreateWriteFile
+        ldx     #CREATEFILE
+        jsr     OpenCommon
+        bcs     OpenRet
+        lda     #<(LoadSaveEnd - LoadSaveStart)
+        sta     WriteSize
+        lda     #>(LoadSaveEnd - LoadSaveStart)
+        sta     WriteSize + 1
+        bcc     WriteFile               ;always
+
+        ;first byte fetched is number of byte to follow,
+        ;copy parameters to file manager parameter list,
+        ;and then dispatch the request
+
+DOSMLI
+        pla
+        tay
+        pla
+        sta     OPSRCH
+        iny
+        sty     OPSRCL
+        bne     +
+        inc     OPSRCH
++       ldy     #0
+        lda     (OPSRCL), y
+        tay
+-       lda     (OPSRCL), y
+        dey
+        sta     (MANPARML), y
+        bne     -
+        lda     (OPSRCL), y
+        clc
+        adc     OPSRCL
+        tay
+        lda     OPSRCH
+        adc     #0
+        pha
+        tya
+        pha
+        jmp     FILEMAN
+
+FileName_b
+        !scrxor $80, $DF, "4LIVE DATA"
+FileName_e
+
+MyWNDLFT
+        !byte   0
+MyWNDWDTH
+        !byte   WIDTH
+MyWNDTOP
+        !byte   0
+MyWNDBTM
+        !byte   HEIGHT
+MyCH
+        !byte   0
+MyCV
+        !byte   0
+
+LoadSaveStart
+
+SaveCH
+        !byte   0                       ;loaded from file if exists
+SaveCV
+        !byte   0                       ;loaded from file if exists
+
+FirstLine
         ;pre-screen line to catch scroll
-        !fill WIDTH, $A0
+        !fill   WIDTH, $A0
 
         ;we reserve one line for status
-vscrn
-status
-        !text "CTRL+("
-        !scrxor $80, "L"
-        !text ")OAD ("
-        !scrxor $80, "S"
-        !text ")AVE ("
-        !scrxor $80, "^"
-        !text ")SCREENSHOT "
+
+        !text   "CTRL+("
+        !scrxor $40, IMPORTKEY
+        !text   ")MPORT ("
+        !scrxor $40, SAVEKEY
+        !text   ")AVE"
+        !text   "             "
         !scrxor $80, "4LIVE-1"
 
         ;not the full $400 to save memory
-        !fill WIDTH * (HEIGHT - 2), $A0
+        !fill   WIDTH * (HEIGHT - 2), $A0
 
-lastline
-        !fill WIDTH, $A0
+LastLine
+        !fill   WIDTH, $A0
+
+LoadSaveEnd
