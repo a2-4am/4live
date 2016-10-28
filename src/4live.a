@@ -4,7 +4,7 @@
 ;
 !cpu 6502
 *=$8000
-!to "_4live#068000", plain
+
 ;
 !addr   WNDLFT          = $20
 !addr   WNDWDTH         = $21
@@ -28,6 +28,8 @@
 !addr   GETPARM         = $3DC
 !addr   KBD             = $C000
 !addr   STROBE          = $C010
+!addr   ROMIN           = $C081
+!addr   LCBANK2         = $C083
 !addr   GBASCALC        = $F847
 !addr   BASCALC         = $FBC1
 !addr   SCROLL          = $FC70
@@ -56,7 +58,11 @@
         SAVEKEY         = $93           ; CTRL-S
 
 ;constants
+        LTARROW         = $88
+        UPARROW         = $8B
         RETURN          = $8D
+        RTARROW         = $95
+        ESC             = $9B
         WIDTH           = 40
         HEIGHT          = 24
         IOBSLOT         = 1
@@ -68,7 +74,7 @@
         NAMELEN         = 30
         CREATEFILE      = 0
         OPENEXISTING    = 1
-        SPECIAL         = 16
+        SPECIAL         = 8
         CMDOPEN         = 1
         CMDCLOSE        = 2
         CMDREAD         = 3
@@ -84,7 +90,18 @@ Install
         ldy     #0
         sty     DOSBUFL
         lda     DOSBASE
-        sta     DOSBUFH
+
+        ;check for DiversiDOS
+
+        cmp     #$BF
+        bne     +
+        lda     LCBANK2
+        lda     LCBANK2
+        lda     #$DD
+
+        ;back to regular DOS
+
++       sta     DOSBUFH
         !byte   $2C ;mask LDY
 -       ldy     #NEXTFILE
         lda     (DOSBUFL), y
@@ -150,6 +167,8 @@ Install
         ;switch to write mode for future accesses
 
         inc     ReadWriteCmd            ;lda WRITECMD / sta ReadWriteCmd
+
+        lda     ROMIN
 
         ;display the welcome message, now that we're finally done
 
@@ -308,17 +327,54 @@ EditorMode
         jsr     KEYIN
         cmp     #HOTKEY
         beq     KeyRet
+        cmp     #ESC
+        beq     KeyRet
         cmp     #SAVEKEY
         beq     SaveFile
         cmp     #IMPORTKEY
         beq     ImportScreen
+        cmp     #LTARROW
+        beq     LineLeft
+        cmp     #UPARROW
+        beq     LineUp
+        cmp     #RTARROW
+        beq     LineRight
+
+OutChar
         jsr     COUT
         lda     CV
         eor     #(HEIGHT - 1)           ;zero on match
         bne     EditorMode
+
+SetRow
         sta     CV
+
+SetRow1
+        lda     CV
         jsr     BASCALC
         bcc     EditorMode              ;always
+
+LineLeft
+        dec     CH
+        bpl     SetRow1
+        lda     #(WIDTH - 1)
+
+SetColumn
+        sta     CH
+        bpl     SetRow1                 ;always
+
+LineUp
+        dec     CV
+        bpl     SetRow1
+        lda     #(HEIGHT - 2)
+        bne     SetRow                  ;always
+
+LineRight
+        inc     CH
+        lda     CH
+        eor     #WIDTH                  ;zero on match
+        bne     SetRow1
+        beq     SetColumn               ;always
 
 ImportScreen
         lda     #<(FirstLine + WIDTH)
@@ -347,6 +403,8 @@ ImportScreen
         bmi     EditorMode
 
 OpenReadFile
+        lda     LCBANK2
+        lda     LCBANK2                 ;support DiversiDOS
         jsr     GETIOB
         sty     OPSRCL
         sta     OPSRCH
@@ -386,6 +444,7 @@ CloseMLI_b
         !byte   CMDCLOSE
 CloseMLI_e
 OpenRet
+        lda     ROMIN
         rts
 
 OpenCommon
