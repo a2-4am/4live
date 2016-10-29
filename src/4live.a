@@ -38,20 +38,15 @@
 !addr   COUT            = $FDED
 
 ;private arbitrary addresses
-!addr   MANPARML        = $40
-!addr   MANPARMH        = $41
+!addr   LINE            = $40
+!addr   ZMANPARML       = $40
+!addr   ZMANPARMH       = $41
 !addr   DOSBUFL         = $42
 !addr   DOSBUFH         = $43
-!addr   ADDRESSL        = $44
-!addr   ADDRESSH        = $45
-!addr   FILESIZEL       = $46
-!addr   FILESIZEH       = $47
-!addr   OPSRCL          = $48
-!addr   OPSRCH          = $49
-!addr   OPDSTL          = $4a
-!addr   OPDSTH          = $4b
-!addr   LINE            = $4c
-!addr   ANIMATE         = $4d
+!addr   OPSRCL          = $44
+!addr   OPSRCH          = $45
+!addr   OPDSTL          = $46
+!addr   OPDSTH          = $47
 
         HOTKEY          = $80           ; CTRL-@
         IMPORTKEY       = $89           ; CTRL-I
@@ -125,8 +120,10 @@ Install
         ;get file manager parameter list
 
         jsr     GETPARM
-        sty     MANPARML
-        sta     MANPARMH
+        sty     ZMANPARML
+        sta     ZMANPARMH
+        sty     MANPARM + 1
+        sta     MANPARM + 2
 
         ;copy DOS buffer pointers to file manager parameter list
 
@@ -138,7 +135,7 @@ Install
 -       ldy     OPDSTL
         lda     (DOSBUFL), y
         ldy     OPDSTH
-        sta     (MANPARML), y
+        sta     (ZMANPARML), y
         inc     OPDSTL
         inc     OPDSTH
         dex
@@ -154,7 +151,7 @@ Install
 +       sta     (DOSBUFL), y
         dey
         bpl     -
-        sty     ANIMATE                 ;enable visible screen-swapping via #$FF
+        sty     ANIMATE + 1             ;enable visible screen-swapping via #$FF
 
         ;open source file and read it if available
 
@@ -236,7 +233,8 @@ SwitchScreens
 
         jsr     VirtScroll
 
-        lda     ANIMATE
+ANIMATE
+        lda     "Q"                     ;self-modified
         beq     +
 
         ;animate it just for fun
@@ -308,11 +306,11 @@ SaveFile
         sta     SaveCH
         lda     CV
         sta     SaveCV
-        inc     ANIMATE                 ;disable animation (was #$FF from above)
+        inc     ANIMATE + 1             ;disable animation (was #$FF from above)
         jsr     SwitchScreens
         jsr     CreateWriteFile
         jsr     SwitchScreens
-        dec     ANIMATE                 ;re-enable animation
+        dec     ANIMATE + 1             ;re-enable animation
 
         ;print anything that isn't a special key
         ;wrap around screen position when we hit edges
@@ -440,7 +438,6 @@ CloseMLI_b
         !byte   CMDCLOSE
 CloseMLI_e
 OpenRet
-        lda     ROMIN
         rts
 
 OpenCommon
@@ -489,7 +486,8 @@ DOSMLI
         tay
 -       lda     (OPSRCL), y
         dey
-        sta     (MANPARML), y
+MANPARM
+        sta     $34f3, y                ;self-modified
         bne     -
         lda     (OPSRCL), y
         clc
