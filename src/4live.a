@@ -198,13 +198,33 @@ GlobalKeyboardHook
 
         jsr     KEYIN
         cmp     #HOTKEY
-        bne     KeyRet
-        jsr     SwitchScreens
+        bne     ReusableRTS1
+        jsr     ScrollEditScreenIn
         jsr     EditorMode
-        jsr     SwitchScreens
+        jsr     ScrollEditScreenOut
         beq     GetKey                  ;always
 
-SwitchScreens
+ScrollEditScreenIn
+        lda     #HEIGHT
+        sta     LINE
+--      ldy     #(WIDTH - 1)
+-       lda     $7D0, y
+        sta     LastLine, y
+        dey
+        bpl     -
+        jsr     ScrollTextScreenDown
+        ldy     #(WIDTH - 1)
+-       lda     FirstLine, y
+        sta     $400, y
+        dey
+        bpl     -
+        jsr     Delay
+        dec     LINE
+        bne     --
+ReusableRTS1
+        rts
+
+ScrollEditScreenOut
         jsr     SwapCoords
 
         ;copy first line of physical screen to first line of virtual screen
@@ -231,7 +251,7 @@ SwitchScreens
 
         ;scroll down virtual screen
 
-        jsr     VirtScroll
+        jsr     VirtScrollDown
 
 ANIMATE
         lda     "Q"                     ;self-modified
@@ -243,13 +263,30 @@ ANIMATE
 
 +       dec     LINE
         bne     --
+        rts
 
-KeyRet
+ScrollTextScreenDown
+        ldx     #$16
+-       lda     TextCalcLo, x
+        sta     _a+1
+        lda     TextCalcLo+1, x
+        sta     _b+1
+        lda     TextCalcHi, x
+        sta     _a+2
+        lda     TextCalcHi+1, x
+        sta     _b+2
+        ldy     #$27
+_a      lda     $FFFF, y        ; self-modified, above
+_b      sta     $FFFF, y        ; self-modified, above
+        dey
+        bpl     _a
+        dex
+        bpl     -
         rts
 
         ;scroll HEIGHT lines
 
-VirtScroll
+VirtScrollDown
         lda     #<(LastLine - WIDTH)
         sta     GBASL
         lda     #>(LastLine - WIDTH)
@@ -278,6 +315,7 @@ VirtScroll
         dec     BAS2H
 +       dex
         bne     --
+ReusableRTS2
         rts
 
 Delay
@@ -307,9 +345,9 @@ SaveFile
         lda     CV
         sta     SaveCV
         inc     ANIMATE + 1             ;disable animation (was #$FF from above)
-        jsr     SwitchScreens
+        jsr     ScrollEditScreenOut
         jsr     CreateWriteFile
-        jsr     SwitchScreens
+        jsr     ScrollEditScreenOut
         dec     ANIMATE + 1             ;re-enable animation
 
         ;print anything that isn't a special key
@@ -320,9 +358,9 @@ EditorMode
         lda     (BASL), y
         jsr     KEYIN
         cmp     #HOTKEY
-        beq     KeyRet
+        beq     ReusableRTS2
         cmp     #ESC
-        beq     KeyRet
+        beq     ReusableRTS2
         cmp     #SAVEKEY
         beq     SaveFile
         cmp     #IMPORTKEY
@@ -523,6 +561,15 @@ SaveCH
         !byte   0                       ;loaded from file if exists
 SaveCV
         !byte   0                       ;loaded from file if exists
+
+TextCalcHi
+        !byte   $04, $04, $05, $05, $06, $06, $07, $07
+        !byte   $04, $04, $05, $05, $06, $06, $07, $07
+        !byte   $04, $04, $05, $05, $06, $06, $07, $07
+TextCalcLo
+        !byte   $00, $80, $00, $80, $00, $80, $00, $80
+        !byte   $28, $A8, $28, $A8, $28, $A8, $28, $A8
+        !byte   $50, $D0, $50, $D0, $50, $D0, $50, $D0
 
 FirstLine
         ;pre-screen line to catch scroll
