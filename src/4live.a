@@ -151,7 +151,6 @@ Install
 +       sta     (DOSBUFL), y
         dey
         bpl     -
-        sty     ANIMATE + 1             ;enable visible screen-swapping via #$FF
 
         ;open source file and read it if available
 
@@ -195,72 +194,135 @@ GetKey
 
 GlobalKeyboardHook
         ;let DOS handle initial cursor
-
         jsr     KEYIN
+
+        ;are we on?
         cmp     #HOTKEY
-        bne     ReusableRTS1
-        jsr     ScrollEditScreenIn
-        jsr     EditorMode
-        jsr     ScrollEditScreenOut
-        beq     GetKey                  ;always
 
-ScrollEditScreenIn
-        lda     #HEIGHT
-        sta     LINE
---      ldy     #(WIDTH - 1)
--       lda     $7D0, y
-        sta     LastLine, y
-        dey
-        bpl     -
-        jsr     ScrollTextScreenDown
-        ldy     #(WIDTH - 1)
--       lda     FirstLine, y
-        sta     $400, y
-        dey
-        bpl     -
-        jsr     Delay
-        dec     LINE
-        bne     --
-ReusableRTS1
-        rts
-
-ScrollEditScreenOut
-        jsr     SwapCoords
-
-        ;copy first line of physical screen to first line of virtual screen
-
-        lda     #HEIGHT
-        sta     LINE
---      ldy     #(WIDTH - 1)
--       lda     $400, y
-        sta     FirstLine, y
-        dey
-        bpl     -
-
-        ;scroll up physical screen
-
-        jsr     SCROLL
-
-        ;append line from virtual screen
-
-        ldy     #(WIDTH - 1)
--       lda     LastLine, y
-        sta     $7D0, y
-        dey
-        bpl     -
-
-        ;scroll down virtual screen
-
-        jsr     VirtScrollDown
-
-ANIMATE
-        lda     "Q"                     ;self-modified
+        ;yes -> branch
         beq     +
 
-        ;animate it just for fun
+        ;no -> return to DOS
+        rts
++
+        ;first, scroll the edit buffer onto the screen
+        ;(this also swaps the current screen contents out so we can restore it later)
+        jsr     ScrollEditBufferIn
 
+        ;do the thing
+        jsr     EditorMode
+
+        ;scroll the edit buffer out and the original screen back in
+        jsr     ScrollEditBufferOut
+
+        ;save to disk
+        jsr     SaveFile
+
+        ;lather, rinse, repeat
+        jmp     GetKey
+
+ScrollEditBufferIn
+        ;save real cursor position and use saved edit buffer cursor position instead
+        jsr     SwapCoords
+
+        lda     #<StatusLine
+        sta     _in+1
+        lda     #>StatusLine
+        sta     _in+2
+        lda     #HEIGHT
+        sta     LINE
+
+        ;copy last line on screen to temporary buffer
+--      ldy     #(WIDTH - 1)
+-       lda     $07D0, y
+        sta     LineBuffer, y
+        dey
+        bpl     -
+
+        ;copy each line on screen down to next line (leaves top line untouched)
+        jsr     ScrollTextScreenDown
+
+        ;copy last line of edit buffer to top line on screen
+        ldy     #(WIDTH - 1)
+_in     lda     $FFFF, y                ;self-modified above and below
+        sta     $0400, y
+        dey
+        bpl     _in
+
+        ;copy temporary buffer to last line in edit buffer
+        lda     _in+1
+        sta     _in2+1
+        lda     _in+2
+        sta     _in2+2
+        ldy     #(WIDTH -1)
+-       lda     LineBuffer, y
+_in2    sta     $FFFF, y                ;self-modified above
+        dey
+        bpl     -
+
+        ;animation delay
         jsr     Delay
 
+        ;set up copy addresses for next line
+        lda     _in+1
+        sec
+        sbc     #WIDTH
+        sta     _in+1
+        bcs     +
+        dec     _in+2
++       dec     LINE
+        bne     --
+        rts
+
+ScrollEditBufferOut
+        ;restore real cursor position
+        jsr     SwapCoords
+
+        lda     #<EditBuffer
+        sta     _out+1
+        lda     #>EditBuffer
+        sta     _out+2
+        lda     #HEIGHT
+        sta     LINE
+
+        ;copy first line on screen to temporary buffer
+--      ldy     #(WIDTH - 1)
+-       lda     $0400, y
+        sta     LineBuffer, y
+        dey
+        bpl     -
+
+        ;copy each line on screen up to next line (leaves last line empty)
+        jsr     SCROLL
+
+        ;copy first line of edit buffer to bottom line of screen
+        ldy     #(WIDTH - 1)
+_out    lda     $FFFF, y                ;self-modified above and below
+        sta     $07D0, y
+        dey
+        bpl     _out
+
+        ;copy temporary buffer to first line in edit buffer
+        lda     _out+1
+        sta     _out2+1
+        lda     _out+2
+        sta     _out2+2
+        ldy     #(WIDTH - 1)
+-       lda     LineBuffer, y
+_out2   sta     $FFFF, y                ;self-modified above
+        dey
+        bpl     -
+
+        ;animation delay
+        jsr     Delay
+
+        ;set up copy addresses for next line
+        lda     _out+1
+        clc
+        adc     #WIDTH
+        sta     _out+1
+        bcc     +
+        inc     _out+2
 +       dec     LINE
         bne     --
         rts
@@ -284,40 +346,6 @@ _b      sta     $FFFF, y        ; self-modified, above
         bpl     -
         rts
 
-        ;scroll HEIGHT lines
-
-VirtScrollDown
-        lda     #<(LastLine - WIDTH)
-        sta     GBASL
-        lda     #>(LastLine - WIDTH)
-        sta     GBASH
-        lda     #<LastLine
-        sta     BAS2L
-        lda     #>LastLine
-        sta     BAS2H
-        ldx     #HEIGHT
---      ldy     #(WIDTH - 1)
--       lda     (GBASL), y
-        sta     (BAS2L), y
-        dey
-        bpl     -
-        sec
-        lda     GBASL
-        sbc     #WIDTH
-        sta     GBASL
-        bcs     +
-        dec     GBASH
-        sec
-+       lda     BAS2L
-        sbc     #WIDTH
-        sta     BAS2L
-        bcs     +
-        dec     BAS2H
-+       dex
-        bne     --
-ReusableRTS2
-        rts
-
 Delay
         lda     #1
         jmp     WAIT
@@ -336,33 +364,19 @@ SwapCoords
         bpl     -
         jmp     BASCALC
 
-        ;restore temporarily the original screen
-        ;so that notes are stored together
-
-SaveFile
-        lda     CH
-        sta     SaveCH
-        lda     CV
-        sta     SaveCV
-        inc     ANIMATE + 1             ;disable animation (was #$FF from above)
-        jsr     ScrollEditScreenOut
-        jsr     CreateWriteFile
-        jsr     ScrollEditScreenOut
-        dec     ANIMATE + 1             ;re-enable animation
+_doneEditorMode
+        rts
 
         ;print anything that isn't a special key
         ;wrap around screen position when we hit edges
-
 EditorMode
         ldy     CH
         lda     (BASL), y
         jsr     KEYIN
         cmp     #HOTKEY
-        beq     ReusableRTS2
+        beq     _doneEditorMode
         cmp     #ESC
-        beq     ReusableRTS2
-        cmp     #SAVEKEY
-        beq     SaveFile
+        beq     _doneEditorMode
         cmp     #IMPORTKEY
         beq     ImportScreen
         cmp     #LTARROW
@@ -409,9 +423,9 @@ LineRight
         beq     SetColumn               ;always
 
 ImportScreen
-        lda     #<(FirstLine + WIDTH)
+        lda     #<(EditBuffer + WIDTH)
         sta     OPSRCL
-        lda     #>(FirstLine + WIDTH)
+        lda     #>(EditBuffer + WIDTH)
         sta     OPSRCH
         ldx     #(HEIGHT - 2)
 
@@ -496,6 +510,11 @@ FileName
 OpenMLI_e
         rts
 
+SaveFile
+        lda     CH
+        sta     SaveCH
+        lda     CV
+        sta     SaveCV
 CreateWriteFile
         ldx     #CREATEFILE
         jsr     OpenCommon
@@ -555,13 +574,6 @@ MyCH
 MyCV
         !byte   0
 
-LoadSaveStart
-
-SaveCH
-        !byte   0                       ;loaded from file if exists
-SaveCV
-        !byte   0                       ;loaded from file if exists
-
 TextCalcHi
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
@@ -571,28 +583,21 @@ TextCalcLo
         !byte   $28, $A8, $28, $A8, $28, $A8, $28, $A8
         !byte   $50, $D0, $50, $D0, $50, $D0, $50, $D0
 
-FirstLine
-        ;pre-screen line to catch scroll
-        !fill   WIDTH, $A0
+LoadSaveStart
 
-        ;we reserve one line for status
+SaveCH
+        !byte   0                       ;loaded from file if exists
+SaveCV
+        !byte   0                       ;loaded from file if exists
 
-        !scrxor $40, "CTRL"
-        !text   "+("
-        !scrxor $40, IMPORTKEY
-        !text   ")"
-        !scrxor $40, "MPORT"
-        !text   " ("
-        !scrxor $40, SAVEKEY
-        !text   ")"
-        !scrxor $40, "AVE"
-        !text   "             "
-        !scrxor $80, "4LIVE-1"
-
-        ;not the full $400 to save memory
-        !fill   WIDTH * (HEIGHT - 2), $A0
-
-LastLine
-        !fill   WIDTH, $A0
+EditBuffer                              ;lines are stored sequentially, not like text page in memory
+        !fill   WIDTH * (HEIGHT - 1), $A0
 
 LoadSaveEnd
+StatusLine                              ;must be exactly WIDTH bytes
+        ;status line
+        !fill   (WIDTH - 8), $20
+        !scrxor $80, "4LIVE V1"
+
+LineBuffer                              ;used during scrolling
+        !fill   WIDTH, 0
