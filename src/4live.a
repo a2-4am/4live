@@ -38,7 +38,6 @@
 !addr   COUT            = $FDED
 
 ;private arbitrary addresses
-!addr   LINE            = $40
 !addr   ZMANPARML       = $40
 !addr   ZMANPARMH       = $41
 !addr   DOSBUFL         = $42
@@ -205,19 +204,28 @@ GlobalKeyboardHook
         ;no -> return to DOS
         rts
 +
+        txa
+        pha
+
         ;first, scroll the edit buffer onto the screen
         ;(this also swaps the current screen contents out so we can restore it later)
         jsr     ScrollEditBufferIn
 
         ;do the thing
+        lda     #0              ;0=false, non-0=true
+        sta     gIsDirty
         jsr     EditorMode
 
         ;scroll the edit buffer out and the original screen back in
         jsr     ScrollEditBufferOut
 
-        ;save to disk
+        ;save to disk (if necessary)
+        lda     gIsDirty
+        beq     +
         jsr     SaveFile
-
++
+        pla
+        tax
         ;lather, rinse, repeat
         jmp     GetKey
 
@@ -377,6 +385,8 @@ EditorMode
         beq     _doneEditorMode
         cmp     #ESC
         beq     _doneEditorMode
+        ldx     #1
+        stx     gIsDirty
         cmp     #IMPORTKEY
         beq     ImportScreen
         cmp     #LTARROW
@@ -572,6 +582,10 @@ MyWNDBTM
 MyCH
         !byte   0
 MyCV
+        !byte   0
+LINE
+        !byte   0
+gIsDirty
         !byte   0
 
 TextCalcHi
