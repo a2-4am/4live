@@ -635,7 +635,7 @@ SaveCV
 
 EditBuffer                              ;lines are stored sequentially, not like text page in memory
         !fill   WIDTH * 8, $A0
-        !scrxor $80, "         4LIVE by 4am & san inc         "
+        !scrxor $80, "  4LIVE by 4am & Peter Ferrie (qkumba)  "
         !fill   WIDTH, $A0
         !scrxor $80, "   Revision 01 / Serial number 161031   "
         !fill   WIDTH * 2, $A0
