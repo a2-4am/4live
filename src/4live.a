@@ -49,7 +49,7 @@
 
         HOTKEY          = $80           ; CTRL-@
         IMPORTKEY       = $89           ; CTRL-I
-        SAVEKEY         = $93           ; CTRL-S
+        CLEARKEY        = $8E           ; CTRL-N
 
 ;constants
         LTARROW         = $88
@@ -154,7 +154,10 @@ Install
         ;open source file and read it if available
 
         jsr     OpenReadFile
-        lda     SaveCH
+        bcs     +
+        lda     #0
+        sta     gClearOnFirstKeypress
++       lda     SaveCH
         sta     MyCH
         lda     SaveCV
         sta     MyCV
@@ -372,67 +375,72 @@ SwapCoords
         bpl     -
         jmp     BASCALC
 
-_doneEditorMode
-        rts
-
-        ;print anything that isn't a special key
-        ;wrap around screen position when we hit edges
 EditorMode
         ldy     CH
         lda     (BASL), y
         jsr     KEYIN
         cmp     #HOTKEY
-        beq     _doneEditorMode
+        beq     HandleKeyExit
         cmp     #ESC
-        beq     _doneEditorMode
+        beq     HandleKeyExit
         ldx     #1
         stx     gIsDirty
         cmp     #IMPORTKEY
-        beq     ImportScreen
+        beq     HandleKeyImportScreen
+        cmp     #CLEARKEY
+        beq     HandleKeyClearScreen
         cmp     #LTARROW
-        beq     LineLeft
+        beq     HandleKeyLineLeft
         cmp     #UPARROW
-        beq     LineUp
+        beq     HandleKeyLineUp
         cmp     #RTARROW
-        beq     LineRight
+        beq     HandleKeyLineRight
 
-OutChar
+        ;print anything that isn't a special key
+        ;wrap around screen position when we hit edges
+        pha
+        lda     gClearOnFirstKeypress
+        beq     +
+        jsr     ClearScreen
+        lda     #0
+        sta     gClearOnFirstKeypress
++       pla
         jsr     COUT
         lda     CV
         eor     #(HEIGHT - 1)           ;zero on match
         bne     EditorMode
-
 SetRow
         sta     CV
-
 SetRow1
         lda     CV
         jsr     BASCALC
         bcc     EditorMode              ;always
 
-LineLeft
+HandleKeyExit
+        rts
+
+HandleKeyLineLeft
         dec     CH
         bpl     SetRow1
         lda     #(WIDTH - 1)
-
 SetColumn
         sta     CH
         bpl     SetRow1                 ;always
 
-LineUp
+HandleKeyLineUp
         dec     CV
         bpl     SetRow1
         lda     #(HEIGHT - 2)
         bne     SetRow                  ;always
 
-LineRight
+HandleKeyLineRight
         inc     CH
         lda     CH
         eor     #WIDTH                  ;zero on match
         bne     SetRow1
         beq     SetColumn               ;always
 
-ImportScreen
+HandleKeyImportScreen
         lda     #<(EditBuffer + WIDTH)
         sta     OPSRCL
         lda     #>(EditBuffer + WIDTH)
@@ -456,7 +464,26 @@ ImportScreen
         inc     OPSRCH
 +       dex
         bpl     --
-        bmi     EditorMode
+        jmp     EditorMode
+
+HandleKeyClearScreen
+        jsr     ClearScreen
+        jmp     EditorMode
+
+ClearScreen                     ; does not clear status line
+        ldx     #(HEIGHT - 2)
+--      lda     TextCalcLo, x
+        sta     _c+1
+        lda     TextCalcHi, x
+        sta     _c+2
+        ldy     #(WIDTH - 1)
+        lda     #$A0
+_c      sta     $FFFF, y        ; self-modified, above
+        dey
+        bpl     _c
+        dex
+        bpl     --
+        rts
 
 OpenReadFile
         lda     LCBANK2
@@ -587,6 +614,8 @@ LINE
         !byte   0
 gIsDirty
         !byte   0
+gClearOnFirstKeypress
+        !byte   1
 
 TextCalcHi
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
@@ -605,13 +634,19 @@ SaveCV
         !byte   0                       ;loaded from file if exists
 
 EditBuffer                              ;lines are stored sequentially, not like text page in memory
-        !fill   WIDTH * (HEIGHT - 1), $A0
+        !fill   WIDTH * 8, $A0
+        !scrxor $80, "         4LIVE by 4am & san inc         "
+        !fill   WIDTH, $A0
+        !scrxor $80, "   Revision 01 / Serial number 161031   "
+        !fill   WIDTH * 2, $A0
+        !scrxor $80, "    https://github.com/a2-4am/4live     "
+        !fill   WIDTH * 9, $A0
 
 LoadSaveEnd
 StatusLine                              ;must be exactly WIDTH bytes
         ;status line
-        !fill   (WIDTH - 8), $20
-        !scrxor $80, "4LIVE V1"
+        !fill   (WIDTH - 5), $20
+        !scrxor $80, "4LIVE"
 
 LineBuffer                              ;used during scrolling
         !fill   WIDTH, 0
