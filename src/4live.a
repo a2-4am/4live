@@ -22,7 +22,8 @@
 !addr   LCBANK2         = $C083
 !addr   APLDETECT       = $FBB3         ;#06 if IIe or later
 !addr   KEYIN           = $FD1B
-!addr   xCOUT           = $FDED
+!addr   RDCHAR          = $FD35
+!addr   COUT            = $FDED
 
 ;private arbitrary addresses only during init
 ;no zpage use once started
@@ -174,7 +175,7 @@ Install
 
         ldy     #0
         beq     +
--       jsr     xCOUT
+-       jsr     COUT
 +       iny
         lda     _WelcomeMessage-1,y
         bne     -
@@ -194,13 +195,10 @@ _WelcomeMessage
         ;on an Apple II+, the cursor is an inverse space in DOS mode.
         ;our cursor flashes.
 
-GetKey
-        ldy     CH
-        lda     (BASL), y
-
 GlobalKeyboardHook
         jsr     KEYIN
 
+GetKey
         ;are we on?
         cmp     #HOTKEY
 
@@ -241,6 +239,7 @@ IsDirty
         tax
 
         ;lather, rinse, repeat
+        jsr     RDCHAR
         jmp     GetKey
 
 ScrollEditBufferIn
