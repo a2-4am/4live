@@ -488,7 +488,8 @@ HandleKeyLineRight
         beq     SetColumn               ;always
 
 HandleKeyLineUp
-        dec     MyCV + 1
+        ldy     MyCV + 1
+        dey
         bpl     SetRow
         ldy     #(HEIGHT - 2)
 
