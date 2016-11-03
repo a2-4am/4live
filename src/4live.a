@@ -1,6 +1,7 @@
 ;
 ; 4LIVE
-; a 4am & san inc hack
+; Copyright (c) 2016 by 4am && qkumba
+; 100% open source, see LICENSE file
 ;
 !cpu 6502
 *=$8000
@@ -552,7 +553,7 @@ HandleKeyLineDown
         ldy     #0
         beq     SetRow                  ;always
 
-ClearScreen                     ; does not clear status line
+ClearScreen                             ; does not clear status line
         pha
         ldx     #(HEIGHT - 2)
         lda     #$A0
@@ -561,7 +562,7 @@ ClearScreen                     ; does not clear status line
         ldy     TextCalcHi, x
         sty     _e+2
         ldy     #(WIDTH - 1)
-_e      sta     $FFFF, y        ; self-modified, above
+_e      sta     $FFFF, y                ; self-modified, above
         dey
         bpl     _e
         dex
@@ -760,8 +761,8 @@ TextCalcLo
 
 LoadSaveStart
 ;;in the future, this field will contain the number of bytes following for write
-;;FileSize                                ;must be first!
-;;        !text   "4s"                    ;self-modified
+;;FileSize                              ;must be first!
+;;        !text   "4s"                  ;self-modified
 
 SaveCH
         !byte   0                       ;loaded from file if exists
@@ -772,7 +773,7 @@ FirstLine                               ;lines are stored sequentially, not like
         !fill   WIDTH * 8, $A0
         !scrxor $80, "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, $A0
-        !scrxor $80, "   Revision 01 / Serial number 161031   "
+        !scrxor $80, "   Revision 01 / Serial number 161103   "
         !fill   WIDTH * 2, $A0
         !scrxor $80, "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, $A0
