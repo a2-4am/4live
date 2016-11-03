@@ -18,7 +18,6 @@
 !addr   GETPARM         = $3DC
 !addr   KBD             = $C000
 !addr   STROBE          = $C010
-!addr   ROMIN           = $C081
 !addr   LCBANK2         = $C083
 !addr   APLDETECT       = $FBB3         ;#06 if IIe or later
 !addr   KEYIN           = $FD1B
@@ -147,7 +146,36 @@ Install
 
         ;open source file and read it if available
 
-        jsr     OpenReadFile
+        jsr     GETIOB
+        sty     OPSRCL
+        sta     OPSRCH
+        ldy     #IOBSLOT
+        lda     (OPSRCL), y
+        lsr
+        lsr
+        lsr
+        lsr
+        sta     FileSlot
+        iny                             ;ldy     #IOBDRIVE
+        lda     (OPSRCL), y
+        sta     FileDrive
+        ldx     #OPENEXISTING
+        jsr     OpenFile
+        bcs     +
+
+;;in the future, the read size will come from the saved file
+;;for now, we use a fixed size
+        ;read file size from file
+
+;;        jsr     ReadFile
+;;        lda     #<LoadSaveStart
+;;        sta     ReadBuffer
+;;        lda     #>LoadSaveStart
+;;        sta     ReadBuffer + 1
+
+        jsr     ReadFile
+        jsr     CloseFile
++
 
         ;set to true if no data file found (carry is set)
 
@@ -188,6 +216,10 @@ Install
 
 _WelcomeMessage
         !scrxor $80, $8D, "4LIVE READY. PRESS CTRL-", HOTKEY + $40, " TO ACTIVATE.", $8D, 0
+
+FileName_b
+        !scrxor $80, $DF, "4LIVE DATA"
+FileName_e
 
         ;support enhanced flashing cursor while waiting for key, if available.
         ;it works by passing to the routine the character under the cursor.
@@ -279,19 +311,11 @@ VirtualBuff2
         ;animation delay
         jsr     Delay                   ;returns carry set
 
-        ;set up copy addresses for next line
-        lda     VirtualBuff1 + 1
-        sbc     #WIDTH
-        sta     VirtualBuff1 + 1
-        bcs     +
-        dec     VirtualBuff1 + 2
-        sec
-+       lda     VirtualBuff2 + 1
-        sbc     #WIDTH
-        sta     VirtualBuff2 + 1
-        bcs     +
-        dec     VirtualBuff2 + 2
-+       dec     ScrollLine1 + 1
+        lda     #-WIDTH
+        ldx     #$FF
+        ldy     #0
+        jsr     UpdateVirtualOff
+        dec     ScrollLine1 + 1
 
 ScrollLine1
         ldx     #"Q"                    ;self-modified
@@ -333,25 +357,35 @@ VirtualBuff4
         bpl     -
 
         ;animation delay
-        jsr     Delay                   ;returns carry set
+        jsr     Delay
 
-        ;set up copy addresses for next line
-        lda     VirtualBuff3 + 1
-        adc     #(WIDTH - 1)
-        sta     VirtualBuff3 + 1
-        bcc     +
-        inc     VirtualBuff3 + 2
-        clc
-+       lda     VirtualBuff4 + 1
-        adc     #WIDTH
-        sta     VirtualBuff4 + 1
-        bcc     +
-        inc     VirtualBuff4 + 2
-+       dec     ScrollLine2 + 1
+        lda     #WIDTH
+        ldx     #0
+        ldy     #<(VirtualBuff3 - VirtualBuff1)
+        jsr     UpdateVirtualOff
+        dec     ScrollLine2 + 1
 
 ScrollLine2
         ldx     #"Q"                    ;self-modified
         bne     --
+        rts
+
+UpdateVirtualOff
+        clc
+        pha
+        ;set up copy addresses for next line
+        adc     VirtualBuff1 + 1, y
+        sta     VirtualBuff1 + 1, y
+        txa
+        adc     VirtualBuff1 + 2, y
+        sta     VirtualBuff1 + 2, y
+        clc
+        pla
++       adc     VirtualBuff2 + 1, y
+        sta     VirtualBuff2 + 1, y
+        txa
+        adc     VirtualBuff2 + 2, y
+        sta     VirtualBuff2 + 2, y
         rts
 
 ScrollTextScreenDown
@@ -444,7 +478,7 @@ EditorMode
         beq     _doneEditorMode
 
 ClearOnFirstKeypress
-        ldx     #0
+        ldx     #0                      ;self-modified
         beq     +
         dec     ClearOnFirstKeypress + 1
         jsr     ClearScreen
@@ -539,7 +573,7 @@ MyKEYIN
         ldx     MyCH + 1
 
 ScreenBuff2
-        lda     $34f3, x
+        lda     $34f3, x                ;self-modified
         sta     ToggleChar + 1
 
 CharDel
@@ -556,7 +590,7 @@ ToggleChar
 +       ldx     MyCH + 1
 
 ScreenBuff3
-        sta     $34f3, x
+        sta     $34f3, x                ;self-modified
 
         ;timing is taken from extended ROM
         ;code is optimised for size
@@ -579,7 +613,7 @@ MyCH
         ldx     #"Q"                    ;self-modified
 
 ScreenBuff4
-        sta     $34f3, x
+        sta     $34f3, x                ;self-modified
         inx
         cpx     #WIDTH
         bne     ++
@@ -604,41 +638,7 @@ MyBASCALC
 ++      stx     MyCH + 1
         rts
 
-OpenReadFile
-        lda     ROMIN                   ;write-enable bank 2 without banking in
-        lda     ROMIN                   ;to support DiversiDOS
-        jsr     GETIOB
-        sty     OPSRCL
-        sta     OPSRCH
-        ldy     #IOBSLOT
-        lda     (OPSRCL), y
-        lsr
-        lsr
-        lsr
-        lsr
-        sta     FileSlot
-        iny                             ;ldy     #IOBDRIVE
-        lda     (OPSRCL), y
-        sta     FileDrive
-        ldx     #OPENEXISTING
-        jsr     OpenCommon
-        bcs     OpenRet
-
-;;in the future, the read size will come from the saved file
-;;for now, we use a fixed size
-        ;read file size from file
-
-;;        jsr     ReadFile
-;;        lda     #<LoadSaveStart
-;;        sta     ReadBuffer
-;;        lda     #>LoadSaveStart
-;;        sta     ReadBuffer + 1
-
-        jsr     ReadFile
-
-          jmp     CloseFile
-
-OpenCommon
+OpenFile
         jsr     DOSMLI
         !byte   OpenMLI_e - OpenMLI_b
 OpenMLI_b
@@ -665,7 +665,7 @@ SaveFile
 
 CreateWriteFile
         ldx     #CREATEFILE
-        jsr     OpenCommon
+        jsr     OpenFile
         bcs     OpenRet
 
         ;set write length
@@ -748,10 +748,6 @@ MANPARM
 XREG
         ldx     #"Q"                    ;self-modified
         jmp     FILEMAN
-
-FileName_b
-        !scrxor $80, $DF, "4LIVE DATA"
-FileName_e
 
 TextCalcHi
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
