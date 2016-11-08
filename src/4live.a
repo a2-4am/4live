@@ -199,6 +199,8 @@ Install
         beq     +
         lda     #INVSPACE
         sta     CharDel + 1
+        lda     #$DF
+        sta     CharMap + 1
 +
         ;display the welcome message, now that we're finally done
 
@@ -305,6 +307,12 @@ VirtualBuff1
 
 VirtualBuff2
 -       lda     $34f3, y                ;self-modified
+        cmp     #("a" + $80)
+        bcc     +
+        cmp     #("z" + 1 + $80)
+        bcs     +
+CharMap
+        and     #$FF                    ;self-modified
         sta     $0400, y
         dey
         bpl     -
@@ -769,14 +777,16 @@ SaveCH
 SaveCV
         !byte   0                       ;loaded from file if exists
 
+!ct "lcase.ct"
 FirstLine                               ;lines are stored sequentially, not like text page in memory
         !fill   WIDTH * 8, $A0
-        !scrxor $80, "         4LIVE by 4am && qkumba         "
+        !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, $A0
-        !scrxor $80, "   Revision 01 / Serial number 161103   "
+        !text   "   Revision 02 / Serial number 161107   "
         !fill   WIDTH * 2, $A0
-        !scrxor $80, "    https://github.com/a2-4am/4live     "
+        !text   "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, $A0
+!ct raw
 
 LoadSaveEnd
         ;in the current version, the status line is not saved
