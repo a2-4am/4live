@@ -20,6 +20,8 @@
 !addr   KBD             = $C000
 !addr   STROBE          = $C010
 !addr   LCBANK2         = $C083
+!addr   ROMIN1          = $C089
+!addr   LCBANK1         = $C08B
 !addr   APLDETECT       = $FBB3         ;#06 if IIe or later
 !addr   KEYIN           = $FD1B
 !addr   RDCHAR          = $FD35
@@ -42,6 +44,9 @@
         SAVEKEY         = $93           ; CTRL-S
 
 ;constants
+        SWAPCOPY        = $368
+        SWAPBUFFER      = $800          ; (LoadSaveEnd - LoadSaveStart) size
+                                        ; currently $39A bytes!
         A2E             = $06
         INVSPACE        = $20
         LTARROW         = $88
@@ -72,6 +77,17 @@
 ;
 
 Install
+        ;switch cursor type depending on Apple revision
+        ;can't delay in case ROM is banked out because Diversi-DOS
+
+        lda     APLDETECT
+        cmp     #A2E
+        beq     +
+        lda     #INVSPACE
+        sta     CharDel + 1 + BankedCopyStart - $D000
+        lda     #("z" + 1 + $80)
+        sta     CharMap + 1 + BankedCopyStart - $D000
++
 
         ;find a free DOS buffer
 
@@ -101,8 +117,8 @@ Install
 
         ;set filename pointer in MLI request packet
 
-        stx     FileName
-        sta     FileName + 1
+        stx     FileName + BankedCopyStart - $D000
+        sta     FileName + 1 + BankedCopyStart - $D000
 
         ;check for empty filename (indicates free buffer)
 
@@ -115,8 +131,8 @@ Install
         jsr     GETPARM
         sty     MANPARML
         sta     MANPARMH
-        sty     MANPARM + 1
-        sta     MANPARM + 2
+        sty     MANPARM + 1 + BankedCopyStart - $D000
+        sta     MANPARM + 2 + BankedCopyStart - $D000
 
         ;copy DOS buffer pointers to file manager parameter list
 
@@ -156,11 +172,35 @@ Install
         lsr
         lsr
         lsr
-        sta     FileSlot
+        sta     FileSlot + BankedCopyStart - $D000
         iny                             ;ldy     #IOBDRIVE
         lda     (OPSRCL), y
-        sta     FileDrive
-        ldx     #OPENEXISTING
+        sta     FileDrive + BankedCopyStart - $D000
+
+        ;copy to swap space
+
+        ldy     #(SWAPCOPYEnd - SWAPCOPYStart)
+-       lda     SWAPCOPYStart - 1, y
+        sta     SWAPCOPY - 1, y
+        dey
+        bne     -
+
+        ;copy to banked RAM
+
+        jsr     BankInRAM1
+        ldx     #>(BankedCopyEnd + 255 - BankedCopyStart)
+
+CopyMod
+-       lda     BankedCopyStart, y
+        sta     $D000, y
+        iny
+        bne     -
+        inc     CopyMod + 2
+        inc     CopyMod + 5
+        dex
+        bne     -
+
+        inx                             ;ldx     #OPENEXISTING
         jsr     OpenFile
         bcs     +
 
@@ -192,16 +232,8 @@ Install
 
         inc     ReadWriteCmd            ;lda WRITECMD / sta ReadWriteCmd
 
-        ;switch cursor type depending on Apple revision
+        lda     ROMIN1
 
-        lda     APLDETECT
-        cmp     #A2E
-        beq     +
-        lda     #INVSPACE
-        sta     CharDel + 1
-        lda     #$DF
-        sta     CharMap + 1
-+
         ;display the welcome message, now that we're finally done
 
         ldy     #0
@@ -224,6 +256,8 @@ FileName_b
         !scrxor $80, $DF, "4LIVE DATA"
 FileName_e
 
+SWAPCOPYStart
+!pseudopc SWAPCOPY {
         ;support enhanced flashing cursor while waiting for key, if available.
         ;it works by passing to the routine the character under the cursor.
         ;the ROM toggles between that character and the Delete character.
@@ -237,16 +271,77 @@ GetKey
         ;are we on?
         cmp     #HOTKEY
 
-        ;yes -> branch
-        beq     +
-
         ;no -> return to DOS
+        bne     ReuseRts
+
+        jsr     BankInRAM1
+        jsr     RunFromBankedRAM
+        lda     ROMIN1
+
+        ;lather, rinse, repeat
+        jsr     RDCHAR
+        jmp     GetKey
+
+SwapFILEMAN
+        lda     ROMIN1
+        jsr     FILEMAN
+
+BankInRAM1
+        bit     LCBANK1
+        bit     LCBANK1
+
+ReuseRts
         rts
 
+        ;sorry, I couldn't find a simpler way...
+
+ExchangeSwapBanked
+        lda     #<(SWAPBUFFER + LoadSaveEnd - LoadSaveStart)
+        sta     ExchangeSwapSource1 + 1
+        sta     ExchangeSwapTarget1 + 1
+        lda     #((>SWAPBUFFER) - >((<(LoadSaveEnd - LoadSaveStart)) + 255))
+        sta     ExchangeSwapSource1 + 2
+        sta     ExchangeSwapTarget1 + 2
+        lda     #<(LoadSaveStart + LoadSaveEnd - LoadSaveStart)
+        sta     ExchangeSwapSource2 + 1
+        sta     ExchangeSwapTarget2 + 1
+        lda     #((>LoadSaveStart) - >((<(LoadSaveEnd - LoadSaveStart)) + 255))
+        sta     ExchangeSwapSource2 + 2
+        sta     ExchangeSwapTarget2 + 2
+        ldx     #>(LoadSaveEnd - LoadSaveStart)
+        ldy     #<(LoadSaveStart - LoadSaveEnd)
+ExchangeSwapSource1
+        lda     $34f3, y                ;self-modified
+        pha
+ExchangeSwapSource2
+        lda     $34f3, y                ;self-modified
+ExchangeSwapTarget1
+        sta     $34f3, y                ;self-modified
+        pla
+ExchangeSwapTarget2
+        sta     $34f3, y                ;self-modified
+        iny
+        bne     ExchangeSwapSource1
+        inc     ExchangeSwapSource1 + 2
+        inc     ExchangeSwapSource2 + 2
+        inc     ExchangeSwapTarget1 + 2
+        inc     ExchangeSwapTarget2 + 2
+        dex
+        bpl     ExchangeSwapSource1
+        rts
+}
+SWAPCOPYEnd
+!if ((SWAPCOPYEnd + SWAPCOPY - SWAPCOPYStart) > $3d0) {
+  !error "swap code too large, ends at ",SWAPCOPYEnd + SWAPCOPY - SWAPCOPYStart
+}
+
+BankedCopyStart
+!pseudopc $D000 {
+RunFromBankedRAM
         ;preserve X across calls
         ;it's important for DOS
 
-+       txa
+        txa
         pha
 
         ;first, scroll the edit buffer onto the screen
@@ -272,10 +367,7 @@ IsDirty
 
 +       pla
         tax
-
-        ;lather, rinse, repeat
-        jsr     RDCHAR
-        jmp     GetKey
+        rts
 
 ScrollEditBufferIn
         lda     #<LastLine
@@ -307,22 +399,22 @@ VirtualBuff1
 
 VirtualBuff2
 -       lda     $34f3, y                ;self-modified
+CharMap
+        cmp     #0                      ;self-modified
+        bcs     +
         cmp     #("a" + $80)
         bcc     +
-        cmp     #("z" + 1 + $80)
-        bcs     +
-CharMap
-        and     #$FF                    ;self-modified
-        sta     $0400, y
+        and     #$DF
++       sta     $0400, y
         dey
         bpl     -
 
         ;animation delay
         jsr     Delay                   ;returns carry set
 
+        tay
         lda     #-WIDTH
         ldx     #$FF
-        ldy     #0
         jsr     UpdateVirtualOff
         dec     ScrollLine1 + 1
 
@@ -366,10 +458,10 @@ VirtualBuff4
         bpl     -
 
         ;animation delay
-        jsr     Delay
+        jsr     Delay                   ;returns carry set
 
+        tax
         lda     #WIDTH
-        ldx     #0
         ldy     #<(VirtualBuff3 - VirtualBuff1)
         jsr     UpdateVirtualOff
         dec     ScrollLine2 + 1
@@ -693,8 +785,10 @@ CloseMLI_b
 CloseMLI_e
         rts
 
-ReadFile
 WriteFile
+        jsr     ExchangeSwapBanked
+
+ReadFile
         jsr     DOSMLI
         !byte   ReadMLI_e - ReadMLI_b
 ReadMLI_b
@@ -714,9 +808,9 @@ WriteSize
                                         ;number of bytes
 ReadBuffer
 WriteBuffer
-        !word   LoadSaveStart           ;buffer
+        !word   SWAPBUFFER              ;buffer
 ReadMLI_e
-        rts
+        jmp     ExchangeSwapBanked
 
         ;first byte fetched is number of byte to follow,
         ;copy parameters to file manager parameter list,
@@ -756,7 +850,7 @@ MANPARM
         bne     -
 XREG
         ldx     #"Q"                    ;self-modified
-        jmp     FILEMAN
+        jmp     SwapFILEMAN
 
 TextCalcHi
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
@@ -769,8 +863,8 @@ TextCalcLo
 
 LoadSaveStart
 ;;in the future, this field will contain the number of bytes following for write
-;;FileSize                              ;must be first!
-;;        !text   "4s"                  ;self-modified
+;;FileSize                                ;must be first!
+;;        !text   "4s"                    ;self-modified
 
 SaveCH
         !byte   0                       ;loaded from file if exists
@@ -798,3 +892,5 @@ LoadSaveEnd
 
 LastLine
         !fill   WIDTH, $A0
+}
+BankedCopyEnd
