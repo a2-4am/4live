@@ -47,6 +47,7 @@
         SWAPCOPY        = $368
         SWAPBUFFER      = $800          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; currently $39A bytes!
+                                        ; needed by DiversiDOS
         A2E             = $06
         INVSPACE        = $20
         LTARROW         = $88
@@ -78,7 +79,7 @@
 
 Install
         ;switch cursor type depending on Apple revision
-        ;can't delay in case ROM is banked out because Diversi-DOS
+        ;can't delay in case ROM is banked out because DiversiDOS
 
         lda     APLDETECT
         cmp     #A2E
@@ -99,6 +100,14 @@ Install
 
         cmp     #$BF
         bne     +
+!if <SWAPBUFFER {
+        ldy     #<SWAPBUFFER
+}
+        sty     ReadBuffer + BankedCopyStart - $D000
+        lda     #>SWAPBUFFER
+        sta     ReadBuffer + 1 + BankedCopyStart - $D000
+        lda     #$A9
+        sta     ExchangeSwapBanked + SWAPCOPYStart - SWAPCOPY
         lda     LCBANK2
         lda     LCBANK2
         lda     #$DD
@@ -283,7 +292,6 @@ GetKey
         jmp     GetKey
 
 SwapFILEMAN
-        lda     ROMIN1
         jsr     FILEMAN
 
 BankInRAM1
@@ -296,7 +304,8 @@ ReuseRts
         ;sorry, I couldn't find a simpler way...
 
 ExchangeSwapBanked
-        lda     #<(SWAPBUFFER + LoadSaveEnd - LoadSaveStart)
+        rts                             ;self-modified to LDA in DiversiDOS environment
+        !byte   <(SWAPBUFFER + LoadSaveEnd - LoadSaveStart)
         sta     ExchangeSwapSource1 + 1
         sta     ExchangeSwapTarget1 + 1
         lda     #((>SWAPBUFFER) - >((<(LoadSaveEnd - LoadSaveStart)) + 255))
@@ -808,7 +817,7 @@ WriteSize
                                         ;number of bytes
 ReadBuffer
 WriteBuffer
-        !word   SWAPBUFFER              ;buffer
+        !word   LoadSaveStart           ;buffer, self-modified in DiversiDOS
 ReadMLI_e
         jmp     ExchangeSwapBanked
 
