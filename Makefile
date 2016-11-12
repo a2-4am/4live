@@ -37,7 +37,7 @@ clean:
 
 $(PGM):
 	mkdir -p $(BUILD)
-	$(ACME) -o $(BUILD)/$(PGM) $(SRC)/$(PGM).a
+	cd $(SRC) && $(ACME) -o ../$(BUILD)/$(PGM) $(PGM).a && cd -
 	cp $(BLANKDISK) $(BUILDDISK)
 	java -jar $(AC) -p $(BUILDDISK) $(A2PGM) B 0x8000 < $(BUILD)/$(PGM)
 	osascript $(BIN)/V2Make.scpt "`pwd`" $(BUILDDISK)
