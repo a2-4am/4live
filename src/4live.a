@@ -4,20 +4,29 @@
 ; 100% open source, see LICENSE file
 ;
 !cpu 6502
-*=$8000
 !ct "lcase.ct"
 
+;user-defined
+        HOTKEY          = $80           ; CTRL-@
+        IMPORTKEY       = $89           ; CTRL-I
+        CLEARKEY        = $8E           ; CTRL-N
+        SAVEKEY         = $93           ; CTRL-S
+
+        INSTALLBUFFER   = $800          ; max 256 bytes, not preserved
+        SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
+                                        ; needed by DiversiDOS, must be page-aligned
+                                        ; region is preserved across calls
+
 ;
-!addr   CH              = $24
-!addr   BASL            = $28
 !addr   KSWL            = $38
 !addr   KSWH            = $39
+!addr   FCBFOP          = $40
 !addr   GETIOB          = $3E3
-!addr   RECONNECTDOS    = $3EA
 !addr   WARMDOS         = $3D0
 !addr   DOSBASE         = $3D2
 !addr   FILEMAN         = $3D6
 !addr   GETPARM         = $3DC
+!addr   RECONNECTDOS    = $3EA
 !addr   KBD             = $C000
 !addr   STROBE          = $C010
 !addr   LCBANK2         = $C083
@@ -28,27 +37,13 @@
 !addr   RDCHAR          = $FD35
 !addr   COUT            = $FDED
 
-;private arbitrary addresses only during init
-;no zpage use once started
-!addr   MANPARML        = $40
-!addr   MANPARMH        = $41
-!addr   DOSBUFL         = $42
-!addr   DOSBUFH         = $43
-!addr   OPSRCL          = $44
-!addr   OPSRCH          = $45
-!addr   OPDSTL          = $46
-!addr   OPDSTH          = $47
-
-        HOTKEY          = $80           ; CTRL-@
-        IMPORTKEY       = $89           ; CTRL-I
-        CLEARKEY        = $8E           ; CTRL-N
-        SAVEKEY         = $93           ; CTRL-S
+;private arbitrary addresses, currently shared with DOS to avoid conflict
+!addr   OPSRCL          = $42
+!addr   OPSRCH          = $43
+!addr   OPDSTL          = $44
+!addr   OPDSTH          = $45
 
 ;constants
-        SWAPCOPY        = $368
-        SWAPBUFFER      = $800          ; (LoadSaveEnd - LoadSaveStart) size
-                                        ; currently $39A bytes!
-                                        ; needed by DiversiDOS
         A2E             = $06
         INVSPACE        = $20
         LTARROW         = $88
@@ -58,14 +53,9 @@
         RTARROW         = $95
         ESC             = $9B
         DELETE          = $FF
-        WIDTH           = 40
-        HEIGHT          = 24
+
         IOBSLOT         = 1
         IOBDRIVE        = 2
-        NEXTFILE        = 36
-        PARMRANGE       = 6
-        PARMFILE        = 8
-        PARMWORK        = 12
         NAMELEN         = 30
         CREATEFILE      = 0
         OPENEXISTING    = 1
@@ -73,93 +63,90 @@
         CMDOPEN         = 1
         CMDCLOSE        = 2
         CMDREAD         = 3
-        CMDWRITE        = 4
         READRANGE       = 2
+        POSREADRANGE    = 4
+        WIDTH           = 40
+        HEIGHT          = 24
+        LDRBASE         = $2ae
 
-;
+*=LDRBASE-4
+LdrHeader
+        !word   LDRBASE, LdrEnd - LdrStart
 
-Install
-        ;switch cursor type depending on Apple revision
-        ;can't delay in case ROM is banked out because DiversiDOS
+        ;main loader routine loads discardable install code to $800,
+        ;since DOS startup will clobber this page anyway
+        ;also carries proxy routines including file manager and banked RAM exchange for DiversiDOS
 
-        lda     APLDETECT
-        cmp     #A2E
-        beq     +
-        lda     #INVSPACE
-        sta     CharDel + 1 + BankedCopyStart - $D000
-        lda     #("z" + 1)
-        sta     CharMap1 + 1
-        sta     CharMap2 + 1 + BankedCopyStart - $D000
-+
+LdrStart
+        jsr     GETIOB
+        sty     OPSRCL
+        sta     OPSRCH
 
-        ;find a free DOS buffer
-
-        ldy     #0
-        sty     DOSBUFL
-        lda     DOSBASE
-
-        ;check for DiversiDOS
+        ;remember if DiversiDOS
 
         cmp     #$BF
+        php
         bne     +
-!if <SWAPBUFFER {
-        ldy     #<SWAPBUFFER
-}
-        sty     ReadBuffer + BankedCopyStart - $D000
-        lda     #>SWAPBUFFER
-        sta     ReadBuffer + 1 + BankedCopyStart - $D000
-        lda     #$A9
-        sta     ExchangeSwapBanked + SWAPCOPYStart - SWAPCOPY
         lda     LCBANK2
         lda     LCBANK2
-        lda     #$DD
++
+        ;set slot and drive in MLI request packet
 
-        ;back to regular DOS
-
-+       sta     DOSBUFH
-        !byte   $2C ;mask LDY
--       ldy     #NEXTFILE
-        lda     (DOSBUFL), y
-        tax
-        iny
-        lda     (DOSBUFL), y
-        stx     DOSBUFL
-        sta     DOSBUFH
+        ldy     #IOBDRIVE
+        lda     (OPSRCL), y
+        sta     FileDrive
+        dey                             ;ldy #IOBSLOT
+        lda     (OPSRCL), y
+        lsr
+        lsr
+        lsr
+        lsr
+        sta     FileSlot
 
         ;set filename pointer in MLI request packet
 
-        stx     FileName + BankedCopyStart - $D000
-        sta     FileName + 1 + BankedCopyStart - $D000
+        lda     FCBFOP
+        sta     FileName
+        lda     FCBFOP + 1
+        sta     FileName + 1
 
-        ;check for empty filename (indicates free buffer)
+        ;restore input name
 
-        ldy     #0
-        lda     (DOSBUFL), y
-        bne     -
+        lda     #"_"
+        dey                             ;ldy #00
+        sta     (FCBFOP), y
 
-        ;get file manager parameter list
+        ;open self and read first overlay
 
-        jsr     GETPARM
-        sty     MANPARML
-        sta     MANPARMH
-        sty     MANPARM + 1 + BankedCopyStart - $D000
-        sta     MANPARM + 2 + BankedCopyStart - $D000
+        jsr     OpenFile
+        jsr     DOSMLI
+        !byte   LdrReadMLI_e - LdrReadMLI_b
+LdrReadMLI_b
+        !byte   CMDREAD
+        !byte   POSREADRANGE
+        !word   0                       ;record number
+        !word   LdrEnd - LdrHeader      ;offset
+        !word   InstallEnd - InstallStart
+                                        ;number of bytes
+        !word   INSTALLBUFFER           ;buffer
+LdrReadMLI_e
 
-        ;copy DOS buffer pointers to file manager parameter list
+        ;no need to close read-only files
+        ;DOS simply returns in that case
+        ;written files are the important ones
+        ;but we're not writing anything here
 
-        lda     #NAMELEN
+        jmp     INSTALLBUFFER
+
+        ;set input name
+
+OpenDataFile
+        lda     LCBANK2
+        lda     LCBANK2
+        lda     FileName
         sta     OPDSTL
-        lda     #PARMWORK
+        lda     FileName + 1
         sta     OPDSTH
-        ldx     #(6 - 1)
--       ldy     OPDSTL
-        lda     (DOSBUFL), y
-        ldy     OPDSTH
-        sta     (MANPARML), y
-        inc     OPDSTL
-        inc     OPDSTH
-        dex
-        bpl     -
 
         ;set input name
 
@@ -168,113 +155,81 @@ Install
 -       cpy     #(FileName_e - FileName_b)
         bcs     +
         lda     FileName_b, y
-+       sta     (DOSBUFL), y
++       sta     (OPDSTL), y
         dey
         bpl     -
 
-        ;open source file and read it if available
+OpenFile
+        jsr     DOSMLI
+        !byte   OpenMLI_e - OpenMLI_b
+OpenMLI_b
+        !byte   CMDOPEN
+        !byte   0                       ;unused
+        !word   0                       ;variable records
+        !byte   0                       ;any volume
+FileDrive
+        !text   "Q"                     ;self-modified
+FileSlot
+        !text   "Q"                     ;self-modified
+        !byte   SPECIAL                 ;file type for when we save
+FileName
+        !text   "4s"                    ;self-modified
+OpenMLI_e
 
-        jsr     GETIOB
-        sty     OPSRCL
-        sta     OPSRCH
-        ldy     #IOBSLOT
-        lda     (OPSRCL), y
-        lsr
-        lsr
-        lsr
-        lsr
-        sta     FileSlot + BankedCopyStart - $D000
-        iny                             ;ldy     #IOBDRIVE
-        lda     (OPSRCL), y
-        sta     FileDrive + BankedCopyStart - $D000
-
-        ;copy to swap space
-
-        ldy     #(SWAPCOPYEnd - SWAPCOPYStart)
--       lda     SWAPCOPYStart - 1, y
-        sta     SWAPCOPY - 1, y
-        dey
-        bne     -
-
-        ;copy to banked RAM
-
-        jsr     BankInRAM1
-        ldx     #>(BankedCopyEnd + 255 - BankedCopyStart)
-
-CopyMod
--       lda     BankedCopyStart, y
-        sta     $D000, y
-        iny
-        bne     -
-        inc     CopyMod + 2
-        inc     CopyMod + 5
-        dex
-        bne     -
-
-        inx                             ;ldx     #OPENEXISTING
-        jsr     OpenFile
-        bcs     +
-
-;;in the future, the read size will come from the saved file
-;;for now, we use a fixed size
-        ;read file size from file
-
-;;        jsr     ReadFile
-;;        lda     #<LoadSaveStart
-;;        sta     ReadBuffer
-;;        lda     #>LoadSaveStart
-;;        sta     ReadBuffer + 1
-
-        jsr     ReadFile
-        jsr     CloseFile
-+
-
-        ;set to true if no data file found (carry is set)
-
-        rol     ClearOnFirstKeypress + 1
-
-        ldx     SaveCH
-        stx     MyCH + 1
-        ldy     SaveCV
-        sty     MyCV + 1
-        jsr     MyBASCALC
-
-        ;switch to write mode for future accesses
-
-        inc     ReadWriteCmd            ;lda WRITECMD / sta ReadWriteCmd
-
-        lda     ROMIN1
-
-        ;display the welcome message, now that we're finally done
-
-        ldy     #0
-        beq     ++
-CharMap1
-        cmp     #0                      ;self-modified
-        bcs     +
-        cmp     #"a"
-        bcc     +
-        and     #$DF
-+       jsr     COUT
-++      iny
-        lda     _WelcomeMessage-1,y
-        bne     CharMap1
-        lda     #<GlobalKeyboardHook
-        sta     KSWL
-        lda     #>GlobalKeyboardHook
-        sta     KSWH
-        jsr     RECONNECTDOS
-        jmp     WARMDOS
-
-_WelcomeMessage
-        !text   $8D, "4Live ready. Press Ctrl-", HOTKEY + $40, " to activate.", $8D, 0
+        rts
 
 FileName_b
         !text   "_4LIVE DATA"
 FileName_e
 
-SWAPCOPYStart
-!pseudopc SWAPCOPY {
+        ;first byte fetched is number of byte to follow,
+        ;copy parameters to file manager parameter list,
+        ;and then dispatch the request
+
+DOSMLI
+        pla
+        tay
+        pla
+        tax
+        iny
+        sty     OPSRCL
+        bne     +
+        inx
++       stx     OPSRCH
+
+        ;get file manager parameter list
+
+        jsr     GETPARM
+        sty     OPDSTL
+        sta     OPDSTH
+        ldy     #0
+        lda     (OPSRCL), y
+        tay
+        clc
+        adc     OPSRCL
+        tax
+        lda     OPSRCH
+        adc     #0
+        pha
+        txa
+        pha
+-       lda     (OPSRCL), y
+        dey
+        sta     (OPDSTL), y
+        bne     -
+XREG
+        ldx     #OPENEXISTING
+
+SwapFILEMAN
+        jmp     FILEMAN                 ;self-modified from JMP to JSR
+
+BankInRAM1
+        bit     LCBANK1
+        bit     LCBANK1
+
+ReuseRts
+        rts
+
         ;support enhanced flashing cursor while waiting for key, if available.
         ;it works by passing to the routine the character under the cursor.
         ;the ROM toggles between that character and the Delete character.
@@ -299,34 +254,53 @@ GetKey
         jsr     RDCHAR
         jmp     GetKey
 
-SwapFILEMAN
-        jsr     FILEMAN
+ReadFile
+WriteFile
+        jsr     ExchangeSwapBanked1
+        jsr     DOSMLI
+        !byte   ReadMLI_e - ReadMLI_b
+ReadMLI_b
+ReadWriteCmd
+        !byte   CMDREAD
+        !byte   READRANGE
+        !word   0                       ;record number
+        !word   0                       ;offset
 
-BankInRAM1
-        bit     LCBANK1
-        bit     LCBANK1
-
-ReuseRts
-        rts
+;;in the future, ReadSize will be initially 2
+;;and ReadBuffer will point to ReadSize
+;;so that the initial file size will be read into the Size field
+;;for subsequent read of remaining bytes
+ReadSize
+WriteSize
+        !word   (LoadSaveEnd - LoadSaveStart)
+                                        ;number of bytes
+ReadBuffer
+WriteBuffer
+        !word   LoadSaveStart           ;buffer, self-modified in DiversiDOS
+ReadMLI_e
+        ;fall through to ExchangeBanked1
 
         ;sorry, I couldn't find a simpler way...
 
-ExchangeSwapBanked
+ExchangeSwapBanked1
         rts                             ;self-modified to LDA in DiversiDOS environment
-        !byte   <(SWAPBUFFER + LoadSaveEnd - LoadSaveStart)
-        sta     ExchangeSwapSource1 + 1
-        sta     ExchangeSwapTarget1 + 1
-        lda     #((>SWAPBUFFER) - >((<(LoadSaveEnd - LoadSaveStart)) + 255))
-        sta     ExchangeSwapSource1 + 2
-        sta     ExchangeSwapTarget1 + 2
-        lda     #<(LoadSaveStart + LoadSaveEnd - LoadSaveStart)
-        sta     ExchangeSwapSource2 + 1
-        sta     ExchangeSwapTarget2 + 1
-        lda     #((>LoadSaveStart) - >((<(LoadSaveEnd - LoadSaveStart)) + 255))
+        !byte   >(LoadSaveStart - >((<(LoadSaveEnd - LoadSaveStart)) + 255))
         sta     ExchangeSwapSource2 + 2
         sta     ExchangeSwapTarget2 + 2
         ldx     #>(LoadSaveEnd - LoadSaveStart)
         ldy     #<(LoadSaveStart - LoadSaveEnd)
+        lda     #<(LoadSaveEnd - LoadSaveStart)
+        sta     ExchangeSwapSource1 + 1
+        sta     ExchangeSwapTarget1 + 1
+        lda     #<LoadSaveEnd
+
+ExchangeSwapSet
+        sta     ExchangeSwapSource2 + 1
+        sta     ExchangeSwapTarget2 + 1
+        lda     #((>SWAPBUFFER) - >((<(LoadSaveEnd - LoadSaveStart)) + 255))
+        sta     ExchangeSwapSource1 + 2
+        sta     ExchangeSwapTarget1 + 2
+
 ExchangeSwapSource1
         lda     $34f3, y                ;self-modified
         pha
@@ -346,11 +320,141 @@ ExchangeSwapTarget2
         dex
         bpl     ExchangeSwapSource1
         rts
+LdrEnd
+!if ((LDRBASE + LdrEnd - LdrStart) > $3d0) {
+  !error "swap code too large, ends at ",LDRBASE + LdrEnd - LdrStart
 }
-SWAPCOPYEnd
-!if ((SWAPCOPYEnd + SWAPCOPY - SWAPCOPYStart) > $3d0) {
-  !error "swap code too large, ends at ",SWAPCOPYEnd + SWAPCOPY - SWAPCOPYStart
+
+        ;install routine is an overlay that is loaded by loader routine above
+        ;loads editor code and data file into banked RAM either directly for DOS 3.3
+        ;or via RAM exchange for DiversiDOS
+
+InstallStart
+!pseudopc INSTALLBUFFER {
+        ;switch cursor type depending on Apple revision
+
+        ldx     #$20                    ;also used as INVSPACE cursor below!
+        stx     SwapFILEMAN
+
+        lda     APLDETECT
+        cmp     #A2E
+        beq     +
+        stx     CharDel + 1 + BankedCopyStart - $D000
+        lda     #("z" + 1)
+        sta     CharMap1 + 1
+        sta     CharMap2 + 1 + BankedCopyStart - $D000
++
+        plp                             ;DiversiDOS state
+        bcc     +                       ;regular DOS
+        lda     #0
+        sta     ReadBuffer
+        lda     #>SWAPBUFFER
+        sta     ReadBuffer + 1
+        sta     InstallReadBuffer + 1
+        lda     #$A9                    ;LDA
+        sta     ExchangeSwapBanked1
+        sta     ExchangeSwapBanked2
++
+        ;enable reading directly into banked RAM
+
+        jsr     BankInRAM1
+
+        ;read second overlay to banked RAM
+
+        jsr     ExchangeSwapBanked2
+        jsr     DOSMLI
+        !byte   InstallReadMLI_e - InstallReadMLI_b
+InstallReadMLI_b
+        !byte   CMDREAD
+        !byte   POSREADRANGE
+        !word   0                       ;record number
+        !word   BankedCopyStart - LdrHeader
+                                        ;offset
+        !word   BankedCopyEnd - BankedCopyStart
+                                        ;number of bytes
+InstallReadBuffer
+        !word   $D000                   ;buffer
+InstallReadMLI_e
+
+        jsr     ExchangeSwapBanked2
+
+        ;open source file and read it if available
+
+        jsr     OpenDataFile
+        bcs     +
+
+;;in the future, the read size will come from the saved file
+;;for now, we use a fixed size
+        ;read file size from file
+
+;;        jsr     ReadFile
+;;        lda     #<LoadSaveStart
+;;        sta     ReadBuffer
+;;        lda     #>LoadSaveStart
+;;        sta     ReadBuffer + 1
+
+        jsr     ReadFile
++
+
+        ;set to true if no data file found (carry is set)
+
+        rol     ClearOnFirstKeypress + 1
+
+        ldx     SaveCH
+        stx     MyCH + 1
+        ldy     SaveCV
+        sty     MyCV + 1
+        jsr     MyBASCALC
+
+        ;switch to write mode for future accesses
+
+        inc     ReadWriteCmd            ;lda WRITECMD / sta ReadWriteCmd
+        dec     XREG + 1                ;lda #CREATEFILE / sta XREG + 1
+
+        lda     ROMIN1
+
+        ;display the welcome message, now that we're finally done
+
+        ldy     #0
+        beq     ++
+CharMap1
+        cmp     #0                      ;self-modified
+        bcs     +
+        cmp     #"a"
+        bcc     +
+        and     #$DF
++       jsr     COUT
+++      iny
+        lda     _WelcomeMessage-1,y
+        bne     CharMap1
+        lda     #<GlobalKeyboardHook
+        sta     KSWL
+        lda     #>GlobalKeyboardHook
+        sta     KSWH
+        jsr     RECONNECTDOS
+        jmp     WARMDOS
+
+ExchangeSwapBanked2
+        rts                             ;self-modified to LDA in DiversiDOS environment
+        !byte   ((>$D000) - >((<(BankedCopyEnd - BankedCopyStart)) + 255))
+        sta     ExchangeSwapSource2 + 2
+        sta     ExchangeSwapTarget2 + 2
+        ldx     #>(BankedCopyEnd - BankedCopyStart)
+        ldy     #<(BankedCopyStart - BankedCopyEnd)
+        lda     #<(BankedCopyEnd - BankedCopyStart)
+        sta     ExchangeSwapSource1 + 1
+        sta     ExchangeSwapTarget1 + 1
+        jmp     ExchangeSwapSet
+
+_WelcomeMessage
+        !text   $8D, "4Live ready. Press Ctrl-", HOTKEY + $40, " to activate.", $8D, 0
 }
+InstallEnd
+!if >(InstallEnd - InstallStart) {
+  !error "swap code too large, ends at ",INSTALLBUFFER + InstallEnd - InstallStart
+}
+
+        ;editor code is an overlay that is loaded by install routine above
 
 BankedCopyStart
 !pseudopc $D000 {
@@ -363,10 +467,10 @@ RunFromBankedRAM
 
         ;first, scroll the edit buffer onto the screen
         ;(this also swaps the current screen contents out so we can restore it later)
-        jsr     ScrollEditBufferIn                      ;returns X=0
+        jsr     ScrollEditBufferIn      ;returns X=0
 
         ;do the thing
-        stx     IsDirty + 1        ;0=false, non-0=true
+        stx     IsDirty + 1             ;0=false, non-0=true
 
         ;do the thing
         jsr     EditorMode
@@ -376,7 +480,7 @@ RunFromBankedRAM
 
         ;save to disk (if necessary)
 IsDirty
-        lda     #"Q"                                    ;self-modified
+        lda     #"Q"                    ;self-modified
         beq     +
 
         ;save to disk
@@ -756,25 +860,6 @@ MyBASCALC
 ++      stx     MyCH + 1
         rts
 
-OpenFile
-        jsr     DOSMLI
-        !byte   OpenMLI_e - OpenMLI_b
-OpenMLI_b
-        !byte   CMDOPEN
-        !byte   0                       ;unused
-        !word   0                       ;variable records
-        !byte   0                       ;any volume
-FileDrive
-        !text   "Q"                     ;self-modified
-FileSlot
-        !text   "Q"                     ;self-modified
-        !byte   SPECIAL                 ;file type for when we save
-FileName
-        !text   "4s"                    ;self-modified
-OpenMLI_e
-OpenRet
-        rts
-
 SaveFile
         lda     MyCH + 1
         sta     SaveCH
@@ -782,8 +867,7 @@ SaveFile
         sta     SaveCV
 
 CreateWriteFile
-        ldx     #CREATEFILE
-        jsr     OpenFile
+        jsr     OpenDataFile
         bcs     OpenRet
 
         ;set write length
@@ -793,81 +877,14 @@ CreateWriteFile
 ;;        lda     #>something
 ;;        sta     WriteSize + 1
         jsr     WriteFile
-
-CloseFile
         jsr     DOSMLI
         !byte   CloseMLI_e - CloseMLI_b
 CloseMLI_b
         !byte   CMDCLOSE
 CloseMLI_e
+
+OpenRet
         rts
-
-WriteFile
-        jsr     ExchangeSwapBanked
-
-ReadFile
-        jsr     DOSMLI
-        !byte   ReadMLI_e - ReadMLI_b
-ReadMLI_b
-ReadWriteCmd
-        !byte   CMDREAD
-        !byte   READRANGE
-        !word   0                       ;record number
-        !word   0                       ;offset
-
-;;in the future, ReadSize will be initially 2
-;;and ReadBuffer will point to ReadSize
-;;so that the initial file size will be read into the Size field
-;;for subsequent read of remaining bytes
-ReadSize
-WriteSize
-        !word   (LoadSaveEnd - LoadSaveStart)
-                                        ;number of bytes
-ReadBuffer
-WriteBuffer
-        !word   LoadSaveStart           ;buffer, self-modified in DiversiDOS
-ReadMLI_e
-        jmp     ExchangeSwapBanked
-
-        ;first byte fetched is number of byte to follow,
-        ;copy parameters to file manager parameter list,
-        ;and then dispatch the request
-
-DOSMLI
-        stx     XREG + 1
-        pla
-        tay
-        pla
-        tax
-        iny
-        sty     OPSRC1 + 1
-        sty     OPSRC2 + 1
-        bne     +
-        inx
-+       stx     OPSRC1 + 2
-        stx     OPSRC2 + 2
-        ldy     #0
-OPSRC1
-        lda     $34f3, y                ;self-modified
-        tay
-        clc
-        adc     OPSRC1 + 1
-        tax
-        lda     OPSRC1 + 2
-        adc     #0
-        pha
-        txa
-        pha
-
-OPSRC2
--       lda     $34f3, y                ;self-modified
-        dey
-MANPARM
-        sta     $34f3, y                ;self-modified
-        bne     -
-XREG
-        ldx     #"Q"                    ;self-modified
-        jmp     SwapFILEMAN
 
 TextCalcHi
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
@@ -892,7 +909,7 @@ FirstLine                               ;lines are stored sequentially, not like
         !fill   WIDTH * 8, $A0
         !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, $A0
-        !text   "   Revision 02 / Serial number 161110   "
+        !text   "   Revision 02 / Serial number 161114   "
         !fill   WIDTH * 2, $A0
         !text   "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, $A0
