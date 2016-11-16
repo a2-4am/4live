@@ -22,6 +22,7 @@ SRC=src
 # project files
 BLANKDISK=$(RES)/work.dsk
 BUILDDISK=$(BUILD)/$(PGM).dsk
+TEMPDISK=$(BUILD)/temp.dsk
 
 # third-party tools required to build
 # https://sourceforge.net/projects/acme-crossass/
@@ -39,5 +40,8 @@ $(PGM):
 	mkdir -p $(BUILD)
 	cd $(SRC) && $(ACME) -o ../$(BUILD)/$(PGM) $(PGM).a && cd -
 	cp $(BLANKDISK) $(BUILDDISK)
-	java -jar $(AC) -p $(BUILDDISK) $(A2PGM) B 0x8000 < $(BUILD)/$(PGM)
+	java -jar $(AC) -cc65 $(BUILDDISK) $(A2PGM) B < $(BUILD)/$(PGM)
+	rsync -a $(BUILDDISK) $(TEMPDISK)
+	(xxd -p -c256 $(TEMPDISK)| head -49; xxd -p -c256 $(BUILD)/$(PGM) | head -1; xxd -p -c256 $(TEMPDISK)| tail -510) | xxd -r -p > $(BUILDDISK)
+	rm -f $(TEMPDISK)
 	osascript $(BIN)/V2Make.scpt "`pwd`" $(BUILDDISK)
