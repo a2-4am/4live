@@ -432,10 +432,11 @@ RunFromBankedRAM
 
         ;first, scroll the edit buffer onto the screen
         ;(this also swaps the current screen contents out so we can restore it later)
-        jsr     ScrollEditBufferIn      ;returns X=0
+        jsr     ScrollEditBufferIn      ;returns Y=FF
 
         ;do the thing
-        stx     IsDirty + 1             ;0=false, non-0=true
+        iny
+        sty     IsDirty + 1             ;0=false, non-0=true
 
         ;do the thing
         jsr     EditorMode
@@ -613,27 +614,37 @@ MyWAIT
         bne     --
         rts
 
+ClearScreen                             ; does not clear status line
+        pha
+        clc
+        bcc     +
+
 HandleKeyImportScreen
         lda     #<(LastLine - WIDTH)
         sta     OPSRC1L
         lda     #>(LastLine - WIDTH)
         sta     OPSRC1H
 
-        ldx     #(HEIGHT - 2)
++       ldx     #(HEIGHT - 2)
 --      jsr     SetTextCalc
         ldy     #(WIDTH - 1)
--       lda     (OPSRC1L), y
-        sta     (OPSRC2L), y
+        lda     #$A0
+-       bcc     +
+        lda     (OPSRC1L), y
++       sta     (OPSRC2L), y
         dey
         bpl     -
+        bcc     +
         sec
         lda     OPSRC1L
         sbc     #WIDTH
         sta     OPSRC1L
         bcs     +
         dec     OPSRC1H
+        sec
 +       dex
         bpl     --
+        bcc     ClearScreenRet
 
         ;print anything that isn't a special key
         ;wrap around screen position when we hit edges
@@ -670,6 +681,9 @@ ClearOnFirstKeypress
         jsr     MyCOUT
         jmp     EditorMode              ;always
 
+ClearScreenRet
+        pla
+
 _doneEditorMode
         rts
 
@@ -702,7 +716,7 @@ SetRow
         bpl     EditorMode              ;always
 
 HandleKeyClearScreen
-        jsr     ClearScreen             ;returns flag=minus
+        jsr     ClearScreen
         dey                             ;-2
         sty     MyCV + 1                ;use big store to trigger wraparound
         ;fall through
@@ -719,20 +733,6 @@ HandleKeyLineDown
         bcc     SetRow                  ;not BNE to allow big store use
         ldy     #0
         beq     SetRow                  ;always
-
-ClearScreen                             ; does not clear status line
-        pha
-        ldx     #(HEIGHT - 2)
---      jsr     SetTextCalc
-        ldy     #(WIDTH - 1)
-        lda     #$A0
--       sta     (OPSRC2L), y
-        dey
-        bpl     -
-        dex
-        bpl     --
-        pla
-        rts
 
 MyKEYIN
         ldx     MyCH + 1
