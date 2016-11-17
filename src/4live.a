@@ -67,7 +67,7 @@
         WIDTH           = 40
         HEIGHT          = 24
         LDRBASE         = $2d9
-        INSTALLBUFFER   = $800          ; max 256 bytes, not preserved
+        INSTALLBUFFER   = $249          ; yes, the overlay overwrites the loader...
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by DiversiDOS, must be page-aligned
                                         ; region is preserved across calls
@@ -76,9 +76,8 @@
 LdrHeader
         !word   LDRBASE, LdrEnd - LdrStart
 
-        ;main loader routine loads discardable install code to $800,
-        ;since DOS startup will clobber this page anyway
-        ;also carries proxy routines including file manager and banked RAM exchange for DiversiDOS
+        ;loader loads to pages 2-3, loads discardable install code also to pages 2-3
+        ;and carries proxy routines including file manager and banked RAM exchange for DiversiDOS
 
 LdrStart
         ;set filename pointer in MLI request packet
@@ -298,8 +297,8 @@ ExchangeSwapSet
         bpl     -
         rts
 LdrEnd
-!if ((LDRBASE + LdrEnd - LdrStart) > $3d0) {
-  !error "swap code too large, ends at ",LDRBASE + LdrEnd - LdrStart
+!if ((LDRBASE + LdrEnd - LdrStart) > $3D0) {
+  !error "swap code too large, ", (LDRBASE + LdrEnd - LdrStart) - $3D0, " bytes too many"
 }
 
         ;install routine is an overlay that is loaded by loader routine above
@@ -417,7 +416,7 @@ _WelcomeMessage
 }
 InstallEnd
 !if >(InstallEnd - InstallStart) {
-  !error "swap code too large, ends at ",INSTALLBUFFER + InstallEnd - InstallStart
+  !error "swap code too large, ends at ", (InstallEnd - InstallStart) - $100, " bytes too many"
 }
 
         ;editor code is an overlay that is loaded by install routine above
