@@ -21,7 +21,6 @@
 !addr   DOSBASE         = $3D2
 !addr   FILEMAN         = $3D6
 !addr   GETPARM         = $3DC
-!addr   RECONNECTDOS    = $3EA
 !addr   KBD             = $C000
 !addr   STROBE          = $C010
 !addr   LCBANK2         = $C083
@@ -68,7 +67,7 @@
         WIDTH           = 40
         HEIGHT          = 24
         LDRBASE         = $2d9
-        INSTALLBUFFER   = $800          ; max 256 bytes, not preserved
+        INSTALLBUFFER   = $249          ; yes, the overlay overwrites the loader...
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by DiversiDOS, must be page-aligned
                                         ; region is preserved across calls
@@ -77,9 +76,8 @@
 LdrHeader
         !word   LDRBASE, LdrEnd - LdrStart
 
-        ;main loader routine loads discardable install code to $800,
-        ;since DOS startup will clobber this page anyway
-        ;also carries proxy routines including file manager and banked RAM exchange for DiversiDOS
+        ;loader loads to pages 2-3, loads discardable install code also to pages 2-3
+        ;and carries proxy routines including file manager and banked RAM exchange for DiversiDOS
 
 LdrStart
         ;set filename pointer in MLI request packet
@@ -92,6 +90,7 @@ LdrStart
         ;set slot and drive in MLI request packet
 
         jsr     GETIOB
+        pha                             ;save for later
         sty     OPSRC1L
         sta     OPSRC1H
         ldy     #IOBDRIVE
@@ -243,8 +242,8 @@ GetKey
         lda     ROMIN1
 
         ;lather, rinse, repeat
-        jsr     RDCHAR
-        jmp     GetKey
+        jsr     RDCHAR                  ;returns non-zero
+        bne     GetKey
 
 ReadFile
 WriteFile
@@ -298,8 +297,8 @@ ExchangeSwapSet
         bpl     -
         rts
 LdrEnd
-!if ((LDRBASE + LdrEnd - LdrStart) > $3d0) {
-  !error "swap code too large, ends at ",LDRBASE + LdrEnd - LdrStart
+!if ((LDRBASE + LdrEnd - LdrStart) > $3D0) {
+  !error "swap code too large, ", (LDRBASE + LdrEnd - LdrStart) - $3D0, " bytes too many"
 }
 
         ;install routine is an overlay that is loaded by loader routine above
@@ -310,7 +309,7 @@ InstallStart
 !pseudopc INSTALLBUFFER {
         ;check for DiversiDOS
 
-        jsr     GETIOB
+        pla
         eor     #$BF
         bne     +                       ;regular DOS
         sta     ReadBuffer
@@ -327,24 +326,7 @@ InstallStart
 
         ;read second overlay to banked RAM
 
-        jsr     ExchangeSwapBanked2
-        lda     #$20
-        sta     SwapFILEMAN
-        jsr     DOSMLI
-        !byte   InstallReadMLI_e - InstallReadMLI_b
-InstallReadMLI_b
-        !byte   CMDREAD
-        !byte   POSREADRANGE
-        !word   0                       ;record number
-        !word   BankedCopyStart - LdrHeader
-                                        ;offset
-        !word   BankedCopyEnd - BankedCopyStart
-                                        ;number of bytes
-InstallReadBuffer
-        !word   $D000                   ;buffer
-InstallReadMLI_e
-
-        jsr     ExchangeSwapBanked2
+        jsr     ReadEditor
 
         ;open source file and read it if available
 
@@ -398,8 +380,26 @@ CharMap1
         sta     KSWL
         lda     #>GlobalKeyboardHook
         sta     KSWH
-        jsr     RECONNECTDOS
         jmp     WARMDOS
+
+ReadEditor
+        jsr     ExchangeSwapBanked2
+        lda     #$20
+        sta     SwapFILEMAN
+        jsr     DOSMLI
+        !byte   InstallReadMLI_e - InstallReadMLI_b
+InstallReadMLI_b
+        !byte   CMDREAD
+        !byte   POSREADRANGE
+        !word   0                       ;record number
+        !word   BankedCopyStart - LdrHeader
+                                        ;offset
+        !word   BankedCopyEnd - BankedCopyStart
+                                        ;number of bytes
+InstallReadBuffer
+        !word   $D000                   ;buffer
+InstallReadMLI_e
+        ;fall through to ExchangeBanked2
 
 ExchangeSwapBanked2
         rts                             ;self-modified to LDA in DiversiDOS environment
@@ -416,7 +416,7 @@ _WelcomeMessage
 }
 InstallEnd
 !if >(InstallEnd - InstallStart) {
-  !error "swap code too large, ends at ",INSTALLBUFFER + InstallEnd - InstallStart
+  !error "swap code too large, ends at ", (InstallEnd - InstallStart) - $100, " bytes too many"
 }
 
         ;editor code is an overlay that is loaded by install routine above
@@ -457,17 +457,8 @@ IsDirty
         rts
 
 ScrollEditBufferIn
-        lda     #<LastLine
-        sta     OPSRC1L
-        lda     #>LastLine
-        sta     OPSRC1H
-        lda     #<(LastLine - WIDTH)
-        sta     OPDST1L
-        lda     #>(LastLine - WIDTH)
-        sta     OPDST1H
-
-        lda     #HEIGHT
-        sta     SCROLLLINE
+        ldy     #(<(ScrollParms2 - ScrollParms1) - 1)
+        jsr     SetScrollLines
 
         ;copy last line on screen to temporary buffer
 --      ldy     #(WIDTH - 1)
@@ -493,31 +484,21 @@ CharMap2
         bpl     -
 
         ;animation delay
-        jsr     Delay                   ;returns carry set
+        jsr     Delay
 
         lda     #-WIDTH
         ldy     #$FF
-        jsr     UpdateVirtualOff
-        dec     SCROLLLINE
+        jsr     UpdateVirtualOff        ;returns zr/nz state of SCROLLLINE
         bne     --
         rts
 
 ScrollEditBufferOut
-        lda     #<FirstLine
-        sta     OPSRC1L
-        lda     #>FirstLine
-        sta     OPSRC1H
-        lda     #<(FirstLine + WIDTH)
-        sta     OPDST1L
-        lda     #>(FirstLine + WIDTH)
-        sta     OPDST1H
-
-        lda     #HEIGHT
-        sta     SCROLLLINE
+        ldy     #((<(ScrollParms2 - ScrollParms1) * 2) - 1)
+        jsr     SetScrollLines
 
         ;copy first line on screen to temporary buffer
 --      ldy     #(WIDTH - 1)
--       lda     $0400, y                ;self-modified
+-       lda     $0400, y
         sta     (OPSRC1L), y
         dey
         bpl     -
@@ -533,14 +514,30 @@ ScrollEditBufferOut
         bpl     -
 
         ;animation delay
-        jsr     Delay                   ;returns carry set
+        jsr     Delay                   ;returns A=0
 
         tay
         lda     #WIDTH
-        jsr     UpdateVirtualOff
-        dec     SCROLLLINE
+        jsr     UpdateVirtualOff        ;returns zr/nz state of SCROLLLINE
         bne     --
         rts
+
+SetScrollLines
+        ldx     #3
+-       lda     ScrollParms1, y
+        sta     OPSRC1L, x
+        dey
+        dex
+        bpl     -
+        lda     #HEIGHT
+        sta     SCROLLLINE
+        rts
+
+ScrollParms1
+        !word   LastLine, LastLine - WIDTH
+
+ScrollParms2
+        !word   FirstLine, FirstLine + WIDTH
 
 UpdateVirtualOff
         ;set up copy addresses for next line
@@ -557,6 +554,7 @@ UpdateVirtualOff
         dex
         dex
         bpl     -
+        dec     SCROLLLINE
         rts
 
 ScrollTextScreenDown
@@ -579,7 +577,7 @@ SetTextCalc
         rts
 
 ScrollTextScreenUp
-        ldx     #1 - HEIGHT
+        ldx     #(1 - HEIGHT)
 -       lda     (TextCalcLo + HEIGHT - $101) +1, x
         sta     OPSRC2L
         lda     TextCalcLo + HEIGHT - $101, x
@@ -617,24 +615,23 @@ MyWAIT
 ClearScreen                             ; does not clear status line
         pha
         clc
-        bcc     +
 
-HandleKeyImportScreen
+HandleKeyImportScreen                   ;called with carry set
         lda     #<(LastLine - WIDTH)
         sta     OPSRC1L
         lda     #>(LastLine - WIDTH)
         sta     OPSRC1H
 
-+       ldx     #(HEIGHT - 2)
+        ldx     #(HEIGHT - 2)
 --      jsr     SetTextCalc
         ldy     #(WIDTH - 1)
         lda     #$A0
--       bcc     +
+-       bcc     +                       ;ClearScreen path
         lda     (OPSRC1L), y
 +       sta     (OPSRC2L), y
         dey
         bpl     -
-        bcc     +
+        bcc     +                       ;ClearScreen path
         sec
         lda     OPSRC1L
         sbc     #WIDTH
@@ -644,7 +641,7 @@ HandleKeyImportScreen
         sec
 +       dex
         bpl     --
-        bcc     ClearScreenRet
+        bcc     ClearScreenRet          ;ClearScreen path
 
         ;print anything that isn't a special key
         ;wrap around screen position when we hit edges
