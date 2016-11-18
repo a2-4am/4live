@@ -10,7 +10,7 @@
         HOTKEY          = $80           ; CTRL-@
         IMPORTKEY       = $89           ; CTRL-I
         CLEARKEY        = $8E           ; CTRL-N
-        SAVEKEY         = $93           ; CTRL-S
+        HIGHLIGHTKEY    = $94           ; CTRL-T
 
 ;
 !addr   KSWL            = $38
@@ -45,12 +45,13 @@
 ;constants
         A2E             = $06
         INVSPACE        = $20
-        LTARROW         = $88
-        DNARROW         = $8A
-        UPARROW         = $8B
-        RETURN          = $8D
-        RTARROW         = $95
+        LTARROW         = $88           ; CTRL-H
+        DNARROW         = $8A           ; CTRL-J
+        UPARROW         = $8B           ; CTRL-K
+        RETURN          = $8D           ; CTRL-M
+        RTARROW         = $95           ; CTRL-U
         ESC             = $9B
+        SPACE           = $A0
         DELETE          = $FF
 
         IOBSLOT         = 1
@@ -66,7 +67,7 @@
         POSREADRANGE    = 4
         WIDTH           = 40
         HEIGHT          = 24
-        LDRBASE         = $2d9
+        LDRBASE         = $2ee
         INSTALLBUFFER   = $249          ; yes, the overlay overwrites the loader...
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by DiversiDOS, must be page-aligned
@@ -167,6 +168,7 @@ FileName
         !text   "4s"                    ;self-modified
 OpenMLI_e
 
+ReuseRts
         rts
 
 FileName_b
@@ -217,33 +219,7 @@ SwapFILEMAN
 BankInRAM1
         bit     LCBANK1
         bit     LCBANK1
-
-ReuseRts
         rts
-
-        ;support enhanced flashing cursor while waiting for key, if available.
-        ;it works by passing to the routine the character under the cursor.
-        ;the ROM toggles between that character and the Delete character.
-        ;on an Apple II+, the cursor is an inverse space in DOS mode.
-        ;our cursor flashes.
-
-GlobalKeyboardHook
-        jsr     KEYIN
-
-GetKey
-        ;are we on?
-        cmp     #HOTKEY
-
-        ;no -> return to DOS
-        bne     ReuseRts
-
-        jsr     BankInRAM1
-        jsr     RunFromBankedRAM
-        lda     ROMIN1
-
-        ;lather, rinse, repeat
-        jsr     RDCHAR                  ;returns non-zero
-        bne     GetKey
 
 ReadFile
 WriteFile
@@ -413,6 +389,30 @@ ExchangeSwapBanked2
 
 _WelcomeMessage
         !text   $8D, "4LIVE ready. Press Ctrl+", HOTKEY + $40, " to activate.", $8D, 0
+
+        ;support enhanced flashing cursor while waiting for key, if available.
+        ;it works by passing to the routine the character under the cursor.
+        ;the ROM toggles between that character and the Delete character.
+        ;on an Apple II+, the cursor is an inverse space in DOS mode.
+        ;our cursor flashes.
+
+GlobalKeyboardHook
+        jsr     KEYIN
+
+GetKey
+        ;are we on?
+        cmp     #HOTKEY
+
+        ;no -> return to DOS
+        bne     ReuseRts
+
+        jsr     BankInRAM1
+        jsr     RunFromBankedRAM
+        lda     ROMIN1
+
+        ;lather, rinse, repeat
+        jsr     RDCHAR                  ;returns non-zero
+        bne     GetKey                  ;always
 }
 InstallEnd
 !if >(InstallEnd - InstallStart) {
@@ -533,12 +533,6 @@ SetScrollLines
         sta     SCROLLLINE
         rts
 
-ScrollParms1
-        !word   LastLine, LastLine - WIDTH
-
-ScrollParms2
-        !word   FirstLine, FirstLine + WIDTH
-
 UpdateVirtualOff
         ;set up copy addresses for next line
 
@@ -612,164 +606,6 @@ MyWAIT
         bne     --
         rts
 
-ClearScreen                             ; does not clear status line
-        pha
-        clc
-
-HandleKeyImportScreen                   ;called with carry set
-        lda     #<(LastLine - WIDTH)
-        sta     OPSRC1L
-        lda     #>(LastLine - WIDTH)
-        sta     OPSRC1H
-
-        ldx     #(HEIGHT - 2)
---      jsr     SetTextCalc
-        ldy     #(WIDTH - 1)
-        lda     #$A0
--       bcc     +                       ;ClearScreen path
-        lda     (OPSRC1L), y
-+       sta     (OPSRC2L), y
-        dey
-        bpl     -
-        bcc     +                       ;ClearScreen path
-        sec
-        lda     OPSRC1L
-        sbc     #WIDTH
-        sta     OPSRC1L
-        bcs     +
-        dec     OPSRC1H
-        sec
-+       dex
-        bpl     --
-        bcc     ClearScreenRet          ;ClearScreen path
-
-        ;print anything that isn't a special key
-        ;wrap around screen position when we hit edges
-
-EditorMode
-        jsr     MyKEYIN
-        cmp     #HOTKEY
-        beq     _doneEditorMode
-        cmp     #ESC
-        beq     _doneEditorMode
-
-ClearOnFirstKeypress
-        ldx     #0                      ;self-modified
-        beq     +
-        dec     ClearOnFirstKeypress + 1
-        jsr     ClearScreen
-+
-        cmp     #LTARROW
-        beq     HandleKeyLineLeft
-        cmp     #DNARROW
-        beq     HandleKeyLineDown
-        cmp     #UPARROW
-        beq     HandleKeyLineUp
-        cmp     #RTARROW
-        beq     HandleKeyLineRight
-        cmp     #RETURN
-        beq     HandleKeyReturn
-        ldx     #1
-        stx     IsDirty + 1
-        cmp     #IMPORTKEY
-        beq     HandleKeyImportScreen
-        cmp     #CLEARKEY
-        beq     HandleKeyClearScreen
-        jsr     MyCOUT
-        jmp     EditorMode              ;always
-
-ClearScreenRet
-        pla
-
-_doneEditorMode
-        rts
-
-HandleKeyLineLeft
-        dec     MyCH + 1
-        bpl     EditorMode
-        lda     #(WIDTH - 1)
-
-SetColumn
-        sta     MyCH + 1
-        bpl     EditorMode              ;always
-
-HandleKeyLineRight
-        inc     MyCH + 1
-        lda     MyCH + 1
-        eor     #WIDTH                  ;zero on match
-        bne     EditorMode
-        beq     SetColumn               ;always
-
-HandleKeyLineUp
-        ldy     MyCV + 1
-        dey
-        bpl     SetRow
-        ldy     #(HEIGHT - 2)
-
-SetRow
-        sty     MyCV + 1
-        ldx     MyCH + 1
-        jsr     MyBASCALC               ;returns flag=plus
-        bpl     EditorMode              ;always
-
-HandleKeyClearScreen
-        jsr     ClearScreen
-        dey                             ;-2
-        sty     MyCV + 1                ;use big store to trigger wraparound
-        ;fall through
-
-HandleKeyReturn
-        lda     #0
-        sta     MyCH + 1
-        ;fall through
-
-HandleKeyLineDown
-        ldy     MyCV + 1
-        iny
-        cpy     #(HEIGHT - 1)           ;zero on match
-        bcc     SetRow                  ;not BNE to allow big store use
-        ldy     #0
-        beq     SetRow                  ;always
-
-MyKEYIN
-        ldx     MyCH + 1
-
-ScreenBuff2
-        lda     $34f3, x                ;self-modified
-        sta     ToggleChar + 1
-
-CharDel
-        lda     #DELETE
-        sec
-        !byte   $24                     ;mask CLC
-ToggleCarry
-        clc
-        bcs     +
-
-ToggleChar
-        lda     #"Q"                    ;self-modified
-
-+       ldx     MyCH + 1
-
-ScreenBuff3
-        sta     $34f3, x                ;self-modified
-
-        ;timing is taken from extended ROM
-        ;code is optimised for size
-
-        ldx     #$31
-        ldy     #0
--       lda     KBD
-        bmi     +
-        dey
-        bne     -
-        dex
-        bne     -
-        bcc     CharDel
-+       bcs     ToggleCarry             ;restore original character, also on exit
-        bit     STROBE
-        rts
-
 MyCOUT
 MyCH
         ldx     #"Q"                    ;self-modified
@@ -800,6 +636,186 @@ MyBASCALC
 ++      stx     MyCH + 1
         rts
 
+MyKEYIN
+        ldx     MyCH + 1
+
+ScreenBuff2
+        lda     $34f3, x                ;self-modified
+        sta     ToggleChar + 1
+
+        ;detect Apple II+ cursor sitting on inverse space
+        ;and replace with normal space so it remains visible
+        ;no inverse alternative for Apple IIe cursor
+
+CharDel
+        ldy     #DELETE                 ;self-modified
+        bmi     +
+        cmp     #INVSPACE
+        bne     +
+        ldy     #SPACE
++       tya
+        sec
+        !byte   $24                     ;mask CLC
+ToggleCarry
+        clc
+        bcs     +
+
+ToggleChar
+        lda     #"Q"                    ;self-modified
+
++       ldx     MyCH + 1
+
+ScreenBuff3
+        sta     $34f3, x                ;self-modified
+
+        ;timing is taken from extended ROM
+        ;code is optimised for size
+
+        ldx     #$31
+        ldy     #0
+-       bit     KBD
+        bmi     +
+        dey
+        bne     -
+        dex
+        bne     -
+        bcc     CharDel
++       bcs     ToggleCarry             ;restore original character, also on exit
+        lda     KBD
+        bit     STROBE
+        rts
+
+        ;print anything that isn't a special key
+        ;wrap around screen position when we hit edges
+
+EditorMode
+        jsr     MyKEYIN
+        ldx     #(KeyTable_e - KeyTable_b)
+-       ldy     DispatchTableLow, x
+        sty     DispatchCommand + 1
+        ldy     DispatchTableHigh, x
+        sty     DispatchCommand + 2
+        dex
+        bmi     SetDirty
+        cmp     KeyTable_b, x
+        bne     -
+        cpx     #(IgnoreClear - KeyTable_b)
+        bcc     DispatchCommand
+        cpx     #(IgnoreDirty - KeyTable_b)
+
+ClearOnFirstKeypress
+        ldy     #0                      ;self-modified
+        beq     +
+        dec     ClearOnFirstKeypress + 1
+        php
+        jsr     ClearScreen             ;preserves A
+        plp
++       bcc     DispatchCommand
+
+SetDirty
+        sta     IsDirty + 1
+
+DispatchCommand
+        jsr     EditorMode              ;self-modified, one or both bytes depending on routine placement
+        jmp     EditorMode
+
+_doneEditorMode
+        pla
+        pla
+
+DispatchReturn
+        rts
+
+HandleKeyLineLeft
+        dec     MyCH + 1
+        bpl     DispatchReturn
+        lda     #(WIDTH - 1)
+
+SetColumn
+        sta     MyCH + 1
+        bpl     DispatchReturn          ;always
+
+HandleKeyLineRight
+        inc     MyCH + 1
+        lda     MyCH + 1
+        eor     #WIDTH                  ;zero on match
+        bne     DispatchReturn
+        beq     SetColumn               ;always
+
+HandleKeyLineUp
+        ldy     MyCV + 1
+        dey
+        bpl     SetRow
+        ldy     #(HEIGHT - 2)
+
+SetRow
+        sty     MyCV + 1
+        ldx     MyCH + 1
+        jmp     MyBASCALC
+
+HandleKeyClearScreen
+        jsr     ClearScreen
+        dey                             ;-2
+        sty     MyCV + 1                ;use big store to trigger wraparound
+        ;fall through
+
+HandleKeyReturn
+        lda     #0
+        sta     MyCH + 1
+        ;fall through
+
+HandleKeyLineDown
+        ldy     MyCV + 1
+        iny
+        cpy     #(HEIGHT - 1)           ;zero on match
+        bcc     SetRow                  ;not BNE to allow big store use
+        ldy     #0
+        beq     SetRow                  ;always
+
+ClearScreen                             ; does not clear status line
+        pha
+        clc
+
+HandleKeyImportScreen                   ;called with carry set
+        lda     #<(LastLine - WIDTH)
+        sta     OPSRC1L
+        lda     #>(LastLine - WIDTH)
+        sta     OPSRC1H
+
+        ldx     #(HEIGHT - 2)
+--      jsr     SetTextCalc
+        ldy     #(WIDTH - 1)
+        lda     #$A0
+-       bcc     +                       ;ClearScreen path
+        lda     (OPSRC1L), y
++       sta     (OPSRC2L), y
+        dey
+        bpl     -
+        bcc     +                       ;ClearScreen path
+        sec
+        lda     OPSRC1L
+        sbc     #WIDTH
+        sta     OPSRC1L
+        bcs     +
+        dec     OPSRC1H
+        sec
++       dex
+        bpl     --
+        bcs     +                       ;ImportScreen path
+        pla
++       rts
+
+HandleKeyHighlight
+        ldx     MyCV + 1
+        jsr     SetTextCalc
+        ldy     #(WIDTH - 1)
+-       lda     (OPSRC2L), y
+        eor     #$80
+        sta     (OPSRC2L), y
+        dey
+        bpl     -
+        rts
+
 SaveFile
         lda     MyCH + 1
         sta     SaveCH
@@ -827,6 +843,32 @@ TextCalcLo
         !byte   $00, $80, $00, $80, $00, $80, $00, $80
         !byte   $28, $A8, $28, $A8, $28, $A8, $28, $A8
         !byte   $50, $D0, $50, $D0, $50, $D0, $50, $D0
+
+ScrollParms1
+        !word   LastLine, LastLine - WIDTH
+
+ScrollParms2
+        !word   FirstLine, FirstLine + WIDTH
+
+KeyTable_b
+        !byte   HOTKEY, ESC
+IgnoreClear
+        !byte   LTARROW, DNARROW, UPARROW, RTARROW, RETURN
+IgnoreDirty
+        !byte   IMPORTKEY, CLEARKEY, HIGHLIGHTKEY
+KeyTable_e
+
+DispatchTableLow
+        !byte   <MyCOUT
+        !byte   <_doneEditorMode, <_doneEditorMode
+        !byte   <HandleKeyLineLeft, <HandleKeyLineDown, <HandleKeyLineUp, <HandleKeyLineRight, <HandleKeyReturn
+        !byte   <HandleKeyImportScreen, <HandleKeyClearScreen, <HandleKeyHighlight
+
+DispatchTableHigh
+        !byte   >MyCOUT
+        !byte   >_doneEditorMode, >_doneEditorMode
+        !byte   >HandleKeyLineLeft, >HandleKeyLineDown, >HandleKeyLineUp, >HandleKeyLineRight, >HandleKeyReturn
+        !byte   >HandleKeyImportScreen, >HandleKeyClearScreen, >HandleKeyHighlight
 
 LoadSaveStart
 SaveCH
