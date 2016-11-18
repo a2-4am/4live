@@ -143,7 +143,7 @@ OpenMainFile
 
         ;set input name
 
-        lda     #$A0
+        lda     #SPACE
 -       cpy     #(FileName_e - FileName_b)
         bcs     +
         lda     FileName_b, y
@@ -215,6 +215,7 @@ XREG
 
 SwapFILEMAN
         jmp     FILEMAN                 ;self-modified from JMP to JSR
+                                        ;to allow fallthrough to bank in RAM
 
 BankInRAM1
         bit     LCBANK1
@@ -343,7 +344,7 @@ InstallStart
         ldy     #0
         beq     ++
 CharMap1
-        cmp     #0                      ;self-modified
+        cmp     #0                      ;self-modified in Apple II+ environment
         bcs     +
         cmp     #"a"
         bcc     +
@@ -360,7 +361,7 @@ CharMap1
 
 ReadEditor
         jsr     ExchangeSwapBanked2
-        lda     #$20
+        lda     #$20                    ;JSR
         sta     SwapFILEMAN
         jsr     DOSMLI
         !byte   InstallReadMLI_e - InstallReadMLI_b
@@ -390,11 +391,7 @@ ExchangeSwapBanked2
 _WelcomeMessage
         !text   $8D, "4LIVE ready. Press Ctrl+", HOTKEY + $40, " to activate.", $8D, 0
 
-        ;support enhanced flashing cursor while waiting for key, if available.
-        ;it works by passing to the routine the character under the cursor.
-        ;the ROM toggles between that character and the Delete character.
-        ;on an Apple II+, the cursor is an inverse space in DOS mode.
-        ;our cursor flashes.
+        ;show original DOS cursor first, whatever it was
 
 GlobalKeyboardHook
         jsr     KEYIN
@@ -474,7 +471,7 @@ ScrollEditBufferIn
         ldy     #(WIDTH - 1)
 -       lda     (OPDST1L), y
 CharMap2
-        cmp     #0                      ;self-modified
+        cmp     #0                      ;self-modified in Apple II+ environment
         bcs     +
         cmp     #"a"
         bcc     +
@@ -606,36 +603,6 @@ MyWAIT
         bne     --
         rts
 
-MyCOUT
-MyCH
-        ldx     #"Q"                    ;self-modified
-
-ScreenBuff4
-        sta     $34f3, x                ;self-modified
-        inx
-        cpx     #WIDTH
-        bne     ++
-        ldx     #0
-MyCV
-        ldy     #"Q"                    ;self-modified
-        iny
-        cpy     #(HEIGHT - 1)
-        bne     MyBASCALC
-        ldy     #0
-
-MyBASCALC
-        sty     MyCV + 1
-        lda     TextCalcLo, y
-        sta     ScreenBuff2 + 1
-        sta     ScreenBuff3 + 1
-        sta     ScreenBuff4 + 1
-        lda     TextCalcHi, y
-        sta     ScreenBuff2 + 2
-        sta     ScreenBuff3 + 2
-        sta     ScreenBuff4 + 2
-++      stx     MyCH + 1
-        rts
-
 MyKEYIN
         ldx     MyCH + 1
 
@@ -643,12 +610,12 @@ ScreenBuff2
         lda     $34f3, x                ;self-modified
         sta     ToggleChar + 1
 
-        ;detect Apple II+ cursor sitting on inverse space
-        ;and replace with normal space so it remains visible
-        ;no inverse alternative for Apple IIe cursor
+        ;since we flash the cursor manually by toggling with an inverse space,
+        ;detect if cursor is over an inverse space and use normal space instead
+        ;otherwise cursor won't be visible
 
 CharDel
-        ldy     #DELETE                 ;self-modified
+        ldy     #DELETE                 ;self-modified to INVSPACE in Apple II+ environment
         bmi     +
         cmp     #INVSPACE
         bne     +
@@ -702,21 +669,25 @@ EditorMode
         cpx     #(IgnoreClear - KeyTable_b)
         bcc     DispatchCommand
         cpx     #(IgnoreDirty - KeyTable_b)
+                                        ;save result in carry
 
 ClearOnFirstKeypress
         ldy     #0                      ;self-modified
         beq     +
         dec     ClearOnFirstKeypress + 1
-        php
-        jsr     ClearScreen             ;preserves A
-        plp
+        php                             ;preserve carry (don't care about the rest)
+        pha
+        jsr     ClearScreen
+        pla
+        plp                             ;restore carry
 +       bcc     DispatchCommand
 
 SetDirty
         sta     IsDirty + 1
 
 DispatchCommand
-        jsr     EditorMode              ;self-modified, one or both bytes depending on routine placement
+        jsr     EditorMode              ;self-modified, current both bytes
+                                        ;but could be just one if all routines begin in the same page...
         jmp     EditorMode
 
 _doneEditorMode
@@ -725,6 +696,24 @@ _doneEditorMode
 
 DispatchReturn
         rts
+
+MyCOUT
+MyCH
+        ldx     #"Q"                    ;self-modified
+
+ScreenBuff4
+        sta     $34f3, x                ;self-modified
+        inx
+        cpx     #WIDTH
+        bne     SetCH
+        ldx     #0
+MyCV
+        ldy     #"Q"                    ;self-modified
+        iny
+        cpy     #(HEIGHT - 1)
+        bne     MyBASCALC
+        ldy     #0
+        beq     MyBASCALC               ;always
 
 HandleKeyLineLeft
         dec     MyCH + 1
@@ -749,9 +738,21 @@ HandleKeyLineUp
         ldy     #(HEIGHT - 2)
 
 SetRow
-        sty     MyCV + 1
         ldx     MyCH + 1
-        jmp     MyBASCALC
+
+MyBASCALC
+        sty     MyCV + 1
+        lda     TextCalcLo, y
+        sta     ScreenBuff2 + 1
+        sta     ScreenBuff3 + 1
+        sta     ScreenBuff4 + 1
+        lda     TextCalcHi, y
+        sta     ScreenBuff2 + 2
+        sta     ScreenBuff3 + 2
+        sta     ScreenBuff4 + 2
+SetCH
+        stx     MyCH + 1
+        rts
 
 HandleKeyClearScreen
         jsr     ClearScreen
@@ -773,7 +774,6 @@ HandleKeyLineDown
         beq     SetRow                  ;always
 
 ClearScreen                             ; does not clear status line
-        pha
         clc
 
 HandleKeyImportScreen                   ;called with carry set
@@ -798,20 +798,41 @@ HandleKeyImportScreen                   ;called with carry set
         sta     OPSRC1L
         bcs     +
         dec     OPSRC1H
-        sec
+        sec                             ;maintain carry for ImportScreen path
 +       dex
         bpl     --
-        bcs     +                       ;ImportScreen path
-        pla
-+       rts
+        rts
 
 HandleKeyHighlight
         ldx     MyCV + 1
         jsr     SetTextCalc
         ldy     #(WIDTH - 1)
 -       lda     (OPSRC2L), y
+
+        ;lowercase to uppercase
+        ;otherwise it's unreadable when inverted
+        ;however, the conversion is not reversible
+
+        cmp     #$E0
+        bcc     +
+        and     #$DF
+
+        ;normal range to control range
+
++       and     #$BF
+
+        ;invert character and print if inverse
+
         eor     #$80
-        sta     (OPSRC2L), y
+        bpl     +
+
+        ;control range to normal range
+
+        cmp     #$A0
+        bcs     +
+        ora     #$40
+
++       sta     (OPSRC2L), y
         dey
         bpl     -
         rts
@@ -886,10 +907,6 @@ FirstLine                               ;lines are stored sequentially, not like
         !fill   WIDTH * 9, $A0
 
 LoadSaveEnd
-        ;in the current version, the status line is not saved
-        ;however, when we move to multi-screen support,
-        ;both the status line and the spill line must be saved
-        ;for scrolling to work properly
         !fill   (WIDTH - 5), $20
         !text   "4LIVE"
 
