@@ -73,7 +73,8 @@
         WIDTH           = 40
         HEIGHT          = 24
         LDRBASE         = $2E0
-        INSTALLBUFFER   = $237          ; yes, the overlay overwrites the loader...
+        INSTALLBUFFER   = $239          ; yes, the overlay overwrites the loader...
+                                        ; see also "warning!" below
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by DiversiDOS, must be page-aligned
                                         ; region is preserved across calls
@@ -389,7 +390,11 @@ CharMap1
 ++      iny
         lda     _WelcomeMessage-1,y
         bne     CharMap1
-        lda     #<GlobalKeyboardHook
+;;warning!  takes advantage of the fact that the hook is at $300!
+;;but this cannot be detected as assemble time because of the forward reference
+;;  !if <GlobalKeyboardHook {
+;;        lda     #<GlobalKeyboardHook
+;;  }
         sta     KSWL
         lda     #>GlobalKeyboardHook
         sta     KSWH
