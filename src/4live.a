@@ -15,6 +15,7 @@
         NEXTPAGEKEY     = $99           ; CTRL-Y
         IMPORTKEY       = $9E           ; CTRL-^
 
+        VERBOSE         = $0            ; set to 1 to show memory usage during build
 ;
 !addr   KSWL            = $38
 !addr   KSWH            = $39
@@ -71,12 +72,11 @@
         POSRDWRRANGE    = 4
         WIDTH           = 40
         HEIGHT          = 24
-        LDRBASE         = $2e0
+        LDRBASE         = $2E0
         INSTALLBUFFER   = $237          ; yes, the overlay overwrites the loader...
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by DiversiDOS, must be page-aligned
                                         ; region is preserved across calls
-        TEMPBUFFER      = $dc00         ; hard upper-limit for the code, must be page-aligned
 
 *=LDRBASE-4
 LdrHeader
@@ -234,11 +234,12 @@ WriteFile
         lsr                             ;read has bit 0 set, write does not
         bcs     ReadFile
 
-;we are not now writing any page-aligned sizes
-;        lda     WriteSize
-;        bne     +
-;        dec     WriteSize + 1
-+       dec     WriteSize
+;;we are not now writing any page-aligned sizes
+;;        lda     WriteSize
+;;        bne     +
+;;        dec     WriteSize + 1
+;;+
+        dec     WriteSize
 
 ReadFile
         jsr     ExchangeBanked1
@@ -494,7 +495,6 @@ RunFromBankedRAM
         tax
         rts
 
-;;candidate for merge with ScrollEditBufferOut
 ScrollEditBufferIn
         ldy     #(<(ScrollParmsDown - ScrollParms) - 1)
         jsr     SetScrollLine
@@ -757,7 +757,7 @@ ClearOnFirstKeypress
         ldy     #0                      ;self-modified
         beq     +
         dec     ClearOnFirstKeypress + 1
-        php                             ;preserve carry (don't care about the rest)
+        php                             ;save carry (don't care about the rest)
         pha
         jsr     ClearScreen
         pla
@@ -766,7 +766,7 @@ ClearOnFirstKeypress
         sta     WriteIfDirty2 + 1
 
 DispatchCommand
-        jsr     EditorMode              ;self-modified, currently both bytes
+        jsr     $34f3                   ;self-modified, currently both bytes
                                         ;but could be just one if all routines begin in the same page...
         jmp     EditorMode
 
@@ -967,7 +967,7 @@ HandleKeyPrevPage
 +++     jsr     LoadSaveHeader
         jsr     CloseFile               ;work around DiversiDOS bug
         jsr     OpenDataFile            ;by close and reopen to flush the write
-        dec     ReadWriteCmd            ;lda CMDREAD / sta ReadWriteCmd
+        dec     ReadWriteCmd            ;lda #CMDREAD / sta ReadWriteCmd
         lda     ReadBuffer
         pha
         adc     #WIDTH
@@ -982,7 +982,7 @@ HandleKeyPrevPage
         sta     ReadBuffer + 1
         pla
         sta     ReadBuffer
-        inc     ReadWriteCmd            ;lda CMDWRITE / sta ReadWriteCmd
+        inc     ReadWriteCmd            ;lda #CMDWRITE / sta ReadWriteCmd
         plp                             ;restore carry
         lda     SaveCH + WIDTH
         pha
@@ -1338,9 +1338,9 @@ FirstLine                               ;lines are stored sequentially, not like
         !fill   WIDTH, $A0
 
 SecondLine
-!if >SecondLine != >LoadSaveStart {
-  !error "first two lines of text buffer must not cross a page"
-}
+  !if >SecondLine != >LoadSaveStart {
+    !error "first two lines of text buffer must not cross a page"
+  }
         !fill   WIDTH * 7, $A0
         !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, $A0
@@ -1356,8 +1356,12 @@ LoadSaveEnd
 LastLine
         !fill   WIDTH, $A0
 
-  !if * > TEMPBUFFER {
-    !error "code is too large, ends at ", *, ", ", * - TEMPBUFFER, " bytes too many"
+TEMPBUFFER=(*+255) and not 255
+  !if (TEMPBUFFER>$DC00) {
+    !error "banked code is too large, ends at ", *, ", ", *-$DC00, " bytes too many"
+  }
+  !if VERBOSE=1 {
+    !warn "banked code end=", *, ", data end=", TEMPBUFFER+$3FF, ", bytes free=", $DC00-*
   }
 }
 BankedCopyEnd
