@@ -139,7 +139,7 @@ JmpInstall
 OpenDataFile
         ldy     #(NAMELEN - 1)
 
-OpenMainFile
+OpenMainFile                            ;called with Y=0 for main file (copies one character)
         lda     FileName
         sta     OPDST1L
         lda     FileName + 1
@@ -282,7 +282,7 @@ ClearVirtualBuffer                      ;called with carry set
         sta     OPSRC1L
         lda     #<LastLine
 
-ExchangeBankedSet
+ExchangeBankedSet                       ;called with A=buffer offset, carry clear
         sta     OPDST1L
 
 ExchangeBankedPatch
@@ -549,7 +549,7 @@ PrintPage
         ldx     CurPage + 1
         inx
 
-HexToDec
+HexToDec                                ;called with X=hex value to print
         txa
         ldx     #0
 -       cmp     #$0A
@@ -560,7 +560,7 @@ HexToDec
 +       jsr     AToScr
         txa
 
-AToScr
+AToScr                                ;called with A=dec value to print
         ora     #"0"
         sta     (OPSRC2L), y
         dey
@@ -599,11 +599,11 @@ ScrollEditBufferOut
         bne     --
         rts
 
-SetScrollLine
+SetScrollLine                           ;called with Y=offset of scroll parameter
         lda     #HEIGHT
         sta     SCROLLLINE
 
-SetScrollParms
+SetScrollParms                          ;called with Y=offset of scroll parameter
         ldx     #3
 -       lda     ScrollParms, y
         sta     OPSRC1L, x
@@ -614,7 +614,7 @@ SetScrollParms
 
         ;set up copy addresses for next line
 
-UpdateVirtualOff
+UpdateVirtualOff                        ;called with A=delta to apply to offsets
         ldx     #2
 -       pha
         clc
@@ -642,7 +642,7 @@ ScrollTextScreenDown
         bpl     -
         rts
 
-SetTextCalc
+SetTextCalc                             ;called with X=line number to resolve
         lda     TextCalcLo, x
         sta     OPSRC2L
         lda     TextCalcHi, x
@@ -774,7 +774,7 @@ SetTextCoords1
         ldx     SaveCH
         ldy     SaveCV
 
-SetTextCoords2
+SetTextCoords2                          ;called with X/Y=horizontal/vertical coords to set
         stx     MyCH + 1
         sty     MyCV + 1
         bpl     MyBASCALC               ;always
@@ -786,7 +786,7 @@ _doneEditorMode
 DispatchReturn
         rts
 
-MyCOUT
+MyCOUT                                  ;called with A=character to print
 MyCH
         ldx     #"Q"                    ;self-modified
 
@@ -829,7 +829,7 @@ HandleKeyLineUp
 SetRow
         ldx     MyCH + 1
 
-MyBASCALC
+MyBASCALC                               ;called with Y=line number to resolve
         sty     MyCV + 1
         lda     TextCalcLo, y
         sta     ScreenBuff2 + 1
@@ -961,7 +961,12 @@ HandleKeyPrevPage
 +       sta     CurPage + 1
 ++      php                             ;save carry (don't care about the rest)
         jsr     ExchangeVirtualBuffer
-+++     jsr     LoadSaveHeader          ;returns X=current page
+
+        ;update header to specify new page count and current page
+
++++     jsr     LoadSaveHeader
+        jsr     CloseFile               ;work around DiversiDOS bug
+        jsr     OpenDataFile            ;by close and reopen to flush the write
         dec     ReadWriteCmd            ;lda CMDREAD / sta ReadWriteCmd
         lda     ReadBuffer
         pha
@@ -971,6 +976,7 @@ HandleKeyPrevPage
         pha
         adc     #0
         sta     ReadBuffer + 1
+        ldx     SaveCV
         jsr     SeekReadWrite
         pla
         sta     ReadBuffer + 1
@@ -1169,7 +1175,7 @@ ScrollTextScreenRight
         bpl     -
         rts
 
-CopyColumn
+CopyColumn                              ;called with A=opcode to specify direction
         sta     CopyColumnPatch1
         eor     #$40
         sta     CopyColumnPatch2
@@ -1223,6 +1229,8 @@ SeekReadWrite                           ;also writes, called with X=page to read
         lda     MyCV + 1
         sta     SaveCV
         jsr     WriteFile               ;also ReadFile
+
+CloseFile
         jsr     DOSMLI
         !byte   CloseMLI_e - CloseMLI_b
 CloseMLI_b
@@ -1247,11 +1255,7 @@ LoadSaveHeader
         sta     SaveCH
         lda     CurPage + 1
         sta     SaveCV
-        pha
-        jsr     WriteFile               ;also ReadFile
-        pla
-        tax
-        rts
+        jmp     WriteFile               ;also ReadFile
 
 TextCalcHi
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
@@ -1263,7 +1267,6 @@ TextCalcLo
         !byte   $50, $D0, $50, $D0, $50, $D0, $50, $D0
 
 ScrollParms
-
         !word   LastLine, LastLine - WIDTH
 ScrollParmsDown                         ;meaningful labels for last character instead of first
 
@@ -1336,7 +1339,7 @@ FirstLine                               ;lines are stored sequentially, not like
 
 SecondLine
 !if >SecondLine != >LoadSaveStart {
-!error "text buffer must not cross a page"
+  !error "first two lines of text buffer must not cross a page"
 }
         !fill   WIDTH * 7, $A0
         !text   "         4LIVE by 4am && qkumba         "
@@ -1358,9 +1361,3 @@ LastLine
   }
 }
 BankedCopyEnd
-;!error         (LoadSaveEnd + WIDTH)
-;!error         <(LoadSaveEnd + WIDTH)
-;!error         >(LoadSaveEnd - <(LoadSaveEnd + WIDTH))
-;!error         (FirstLine + WIDTH)
-;!error         <(FirstLine + WIDTH)
-;!error         >(FirstLine - <(FirstLine + WIDTH))
