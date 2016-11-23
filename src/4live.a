@@ -73,7 +73,7 @@
         WIDTH           = 40
         HEIGHT          = 24
         LDRBASE         = $2E0
-        INSTALLBUFFER   = $239          ; yes, the overlay overwrites the loader...
+        INSTALLBUFFER   = $23C          ; yes, the overlay overwrites the loader...
                                         ; see also "warning!" below
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by DiversiDOS, must be page-aligned
@@ -374,7 +374,6 @@ InstallStart
         lda     #("z" + 1)
         sta     CharMap1 + 1
         sta     CharMap2 + 1
-        sta     CharMap3 + 1
 +
         ;display the welcome message, now that we're finally done
 
@@ -520,13 +519,8 @@ ScrollEditBufferIn
 
         ldy     #(WIDTH - 1)
 -       lda     (OPDST1L), y
-CharMap2
-        cmp     #0                      ;self-modified in Apple II+ environment
-        bcs     +
-        cmp     #"a"
-        bcc     +
-        and     #$DF
-+       sta     $0400, y
+        jsr     CharMap2
+        sta     $0400, y
         dey
         bpl     -
 
@@ -570,6 +564,14 @@ AToScr                                ;called with A=dec value to print
         sta     (OPSRC2L), y
         dey
         rts
+
+CharMap2
+        cmp     #0                      ;self-modified in Apple II+ environment
+        bcs     +
+        cmp     #"a"
+        bcc     +
+        and     #$DF
++       rts
 
 ScrollEditBufferOut
         ldy     #(<(ScrollParmsUp - ScrollParms) - 1)
@@ -1065,21 +1067,20 @@ ExchangeVirtualBuffer
         sta     ExchangeBankedPatch + 1
         rts
 
-ScrollEditBufferLeft
+ScrollEditBufferLeft                    ;called with carry set
         lda     #-WIDTH
         sta     SCROLLLINE
         ldx     #(WIDTH - 1)
         ldy     #0
         lda     #(<(ScrollParmsLeft - ScrollParms) - 1)
-        sec
         bcs     +                       ;always
 
-ScrollEditBufferRight
+ScrollEditBufferRight                   ;called with carry clear
         ldx     #0
         ldy     #(WIDTH - 1)
         sty     SCROLLLINE
         lda     #(<(ScrollParmsRight - ScrollParms) - 1)
-        clc
+
 +       sta     ScrollEditPatch1 + 1
         stx     ScrollEditPatch2 + 1
 
@@ -1114,13 +1115,7 @@ ScrollEditPatch1
 -       jsr     SetTextCalc
         ldy     SCROLLLINE
         lda     (OPSRC1L), y
-CharMap3
-        cmp     #0                      ;self-modified in Apple II+ environment
-        bcs     ScrollEditPatch2
-        cmp     #"a"
-        bcc     ScrollEditPatch2
-        and     #$DF
-
+        jsr     CharMap2
 ScrollEditPatch2
         ldy     #"Q"                    ;self-modified
         sta     (OPSRC2L), y
