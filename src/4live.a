@@ -8,10 +8,14 @@
 
 ;user-defined
         HOTKEY          = $80           ; CTRL-@
-        IMPORTKEY       = $89           ; CTRL-I
-        CLEARKEY        = $8E           ; CTRL-N
-        HIGHLIGHTKEY    = $94           ; CTRL-T
+        HIGHLIGHTKEY    = $82           ; CTRL-B
+        CLEARKEY        = $83           ; CTRL-C
+        PREVPAGEKEY     = $92           ; CTRL-R
+        ADDPAGEKEY      = $94           ; CTRL-T
+        NEXTPAGEKEY     = $99           ; CTRL-Y
+        IMPORTKEY       = $9E           ; CTRL-^
 
+        VERBOSE         = $0            ; set to 1 to show memory usage during build
 ;
 !addr   KSWL            = $38
 !addr   KSWH            = $39
@@ -63,12 +67,14 @@
         CMDOPEN         = 1
         CMDCLOSE        = 2
         CMDREAD         = 3
+        CMDWRITE        = 4
         READRANGE       = 2
-        POSREADRANGE    = 4
+        POSRDWRRANGE    = 4
         WIDTH           = 40
         HEIGHT          = 24
-        LDRBASE         = $2ee
-        INSTALLBUFFER   = $249          ; yes, the overlay overwrites the loader...
+        LDRBASE         = $2E0
+        INSTALLBUFFER   = $23C          ; yes, the overlay overwrites the loader...
+                                        ; see also "warning!" below
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by DiversiDOS, must be page-aligned
                                         ; region is preserved across calls
@@ -112,8 +118,8 @@ LdrStart
         jsr     DOSMLI
         !byte   LdrReadMLI_e - LdrReadMLI_b
 LdrReadMLI_b
-        !byte   CMDREAD
-        !byte   POSREADRANGE
+        !byte   CMDREAD                 ;command
+        !byte   POSRDWRRANGE            ;subcommand
         !word   0                       ;record number
         !word   LdrEnd - LdrHeader      ;offset
         !word   InstallEnd - InstallStart
@@ -126,6 +132,7 @@ LdrReadMLI_e
         ;written files are the important ones
         ;but we're not writing anything here
 
+JmpInstall
         jmp     INSTALLBUFFER
 
         ;set input name
@@ -133,7 +140,7 @@ LdrReadMLI_e
 OpenDataFile
         ldy     #(NAMELEN - 1)
 
-OpenMainFile
+OpenMainFile                            ;called with Y=0 for main file (copies one character)
         lda     FileName
         sta     OPDST1L
         lda     FileName + 1
@@ -143,7 +150,7 @@ OpenMainFile
 
         ;set input name
 
-        lda     #$A0
+        lda     #SPACE
 -       cpy     #(FileName_e - FileName_b)
         bcs     +
         lda     FileName_b, y
@@ -172,7 +179,7 @@ ReuseRts
         rts
 
 FileName_b
-        !text   "_4LIVE DATA"
+        !text   "_4LIVE DATA"           ;first character must match first character of binary name
 FileName_e
 
         ;first byte fetched is number of byte to follow,
@@ -215,56 +222,82 @@ XREG
 
 SwapFILEMAN
         jmp     FILEMAN                 ;self-modified from JMP to JSR
-
+                                        ;to allow fall-through to bank-in RAM
 BankInRAM1
         bit     LCBANK1
         bit     LCBANK1
         rts
 
-ReadFile
+        ;write size must be one less than required value because of course it must
+
 WriteFile
-        jsr     ExchangeSwapBanked1
+        lda     ReadWriteCmd
+        lsr                             ;read has bit 0 set, write does not
+        bcs     ReadFile
+
+;;we are not now writing any page-aligned sizes
+;;        lda     WriteSize
+;;        bne     +
+;;        dec     WriteSize + 1
+;;+
+        dec     WriteSize
+
+ReadFile
+        jsr     ExchangeBanked1
         jsr     DOSMLI
         !byte   ReadMLI_e - ReadMLI_b
 ReadMLI_b
 ReadWriteCmd
-        !byte   CMDREAD
-        !byte   READRANGE
+        !byte   CMDREAD                 ;command
+        !byte   POSRDWRRANGE            ;sub-command
         !word   0                       ;record number
-        !word   0                       ;offset
+
+ReadOffset
+WriteOffset
+        !word   0                       ;offset, self-modified according to page number
 
 ReadSize
 WriteSize
-        !word   (LoadSaveEnd - LoadSaveStart)
-                                        ;number of bytes
+        !text   "4s"                    ;number of bytes, self-modified
+
 ReadBuffer
 WriteBuffer
         !word   LoadSaveStart           ;buffer, self-modified in DiversiDOS
 ReadMLI_e
         ;fall through to ExchangeBanked1
 
+        ;swap banked dynamic region with spare region also in banked memory
+        ;call again to restore the banked dynamic region
         ;sorry, I couldn't find a simpler way...
 
-ExchangeSwapBanked1
-        rts                             ;self-modified to LDA in DiversiDOS environment
-        !byte   (>LoadSaveStart) - >((<(LoadSaveEnd - LoadSaveStart)) + 255)
-        sta     OPDST1H
-        ldx     #>(LoadSaveEnd - LoadSaveStart)
-        ldy     #<(LoadSaveStart - LoadSaveEnd)
-        lda     #<(LoadSaveEnd - LoadSaveStart)
-        sta     OPSRC1L
-        lda     #<LoadSaveEnd
+ExchangeBanked1
+        rts                             ;self-modified to CLC in DiversiDOS environment
 
-ExchangeSwapSet
+        ;fill banked dynamic region with spaces
+
+ClearVirtualBuffer                      ;called with carry set
+        lda     #>(LoadSaveStart - <(LoadSaveStart - LastLine))
+        sta     OPDST1H
+        ldx     #>(LastLine - LoadSaveStart)
+        ldy     #<(LoadSaveStart - LastLine)
+        lda     #<(LastLine - LoadSaveStart)
+        sta     OPSRC1L
+        lda     #<LastLine
+
+ExchangeBankedSet                       ;called with A=buffer offset, carry clear
         sta     OPDST1L
-        lda     #(>SWAPBUFFER) - >((<(LoadSaveEnd - LoadSaveStart)) + 255)
+
+ExchangeBankedPatch
+        lda     #>(SWAPBUFFER - <(LoadSaveStart - LastLine))
         sta     OPSRC1H
--       lda     (OPSRC1L), y
+        lda     #SPACE
+-       bcs     +                       ;the ClearVirtualBuffer path
+        lda     (OPSRC1L), y
         pha
         lda     (OPDST1L), y
         sta     (OPSRC1L), y
         pla
-        sta     (OPDST1L), y
++       sta     (OPDST1L), y
         iny
         bne     -
         inc     OPSRC1H
@@ -273,16 +306,20 @@ ExchangeSwapSet
         bpl     -
         rts
 LdrEnd
-!if ((LDRBASE + LdrEnd - LdrStart) > $3D0) {
-  !error "swap code too large, ", (LDRBASE + LdrEnd - LdrStart) - $3D0, " bytes too many"
+!if (LdrEnd > $3D0) {
+  !error "page 3 swap-code too large, ", LdrEnd - $3D0, " bytes too many"
+} else {
+  !if (LdrEnd < $3D0) {
+    !error "LDRBASE too low, change to ", LdrStart + $3D0 - LdrEnd
+  }
 }
 
         ;install routine is an overlay that is loaded by loader routine above
         ;loads editor code and data file into banked RAM either directly for DOS 3.3
         ;or via RAM exchange for DiversiDOS
 
-InstallStart
 !pseudopc INSTALLBUFFER {
+InstallStart
         ;check for DiversiDOS
 
         pla
@@ -292,9 +329,9 @@ InstallStart
         lda     #>SWAPBUFFER
         sta     ReadBuffer + 1
         sta     InstallReadBuffer + 1
-        lda     #$A9                    ;LDA
-        sta     ExchangeSwapBanked1
-        sta     ExchangeSwapBanked2
+        lda     #$18                    ;CLC
+        sta     ExchangeBanked1
+        sta     ExchangeBanked2
 +
         ;enable reading directly into banked RAM
 
@@ -304,25 +341,25 @@ InstallStart
 
         jsr     ReadEditor
 
-        ;open source file and read it if available
+        ;open source file and read header if available
 
-        jsr     OpenDataFile
+        jsr     LoadSaveHeader
         bcs     +
-        jsr     ReadFile
+        lda     SaveCH
+        sta     Pages + 1
+        ldx     SaveCV
+        stx     CurPage + 1
+        jsr     SeekReadWrite
 +
         ;set to true if no data file found (carry is set)
 
         rol     ClearOnFirstKeypress + 1
 
-        ldx     SaveCH
-        stx     MyCH + 1
-        ldy     SaveCV
-        sty     MyCV + 1
-        jsr     MyBASCALC
+        jsr     SetTextCoords1
 
         ;switch to write mode for future accesses
 
-        inc     ReadWriteCmd            ;lda WRITECMD / sta ReadWriteCmd
+        inc     ReadWriteCmd            ;lda #CMDWRITE / sta ReadWriteCmd
         dec     XREG + 1                ;lda #CREATEFILE / sta XREG + 1
 
         lda     ROMIN1
@@ -343,7 +380,7 @@ InstallStart
         ldy     #0
         beq     ++
 CharMap1
-        cmp     #0                      ;self-modified
+        cmp     #0                      ;self-modified in Apple II+ environment
         bcs     +
         cmp     #"a"
         bcc     +
@@ -352,21 +389,25 @@ CharMap1
 ++      iny
         lda     _WelcomeMessage-1,y
         bne     CharMap1
-        lda     #<GlobalKeyboardHook
+;;warning!  takes advantage of the fact that the hook is at $300!
+;;but this cannot be detected as assemble time because of the forward reference
+;;  !if <GlobalKeyboardHook {
+;;        lda     #<GlobalKeyboardHook
+;;  }
         sta     KSWL
         lda     #>GlobalKeyboardHook
         sta     KSWH
-        jmp     WARMDOS
+        jmp     WARMDOS                 ;DOS will reconnect the vector itself
 
 ReadEditor
-        jsr     ExchangeSwapBanked2
-        lda     #$20
+        jsr     ExchangeBanked2
+        lda     #$20                    ;JSR
         sta     SwapFILEMAN
         jsr     DOSMLI
         !byte   InstallReadMLI_e - InstallReadMLI_b
 InstallReadMLI_b
-        !byte   CMDREAD
-        !byte   POSREADRANGE
+        !byte   CMDREAD                 ;command
+        !byte   POSRDWRRANGE            ;subcommand
         !word   0                       ;record number
         !word   BankedCopyStart - LdrHeader
                                         ;offset
@@ -377,33 +418,31 @@ InstallReadBuffer
 InstallReadMLI_e
         ;fall through to ExchangeBanked2
 
-ExchangeSwapBanked2
-        rts                             ;self-modified to LDA in DiversiDOS environment
-        !byte   ((>$D000) - >((<(BankedCopyEnd - BankedCopyStart)) + 255))
+ExchangeBanked2
+        rts                             ;self-modified to CLC (for compatibility) in DiversiDOS environment
+        lda     #>($D000 - <(BankedCopyStart - BankedCopyEnd))
         sta     OPDST1H
         ldx     #>(BankedCopyEnd - BankedCopyStart)
         ldy     #<(BankedCopyStart - BankedCopyEnd)
         lda     #<(BankedCopyEnd - BankedCopyStart)
         sta     OPSRC1L
-        jmp     ExchangeSwapSet
+        jmp     ExchangeBankedSet
 
 _WelcomeMessage
         !text   $8D, "4LIVE ready. Press Ctrl+", HOTKEY + $40, " to activate.", $8D, 0
 
-        ;support enhanced flashing cursor while waiting for key, if available.
-        ;it works by passing to the routine the character under the cursor.
-        ;the ROM toggles between that character and the Delete character.
-        ;on an Apple II+, the cursor is an inverse space in DOS mode.
-        ;our cursor flashes.
+        ;show original DOS cursor first, whatever it was
 
 GlobalKeyboardHook
         jsr     KEYIN
 
 GetKey
         ;are we on?
+
         cmp     #HOTKEY
 
         ;no -> return to DOS
+
         bne     ReuseRts
 
         jsr     BankInRAM1
@@ -411,12 +450,17 @@ GetKey
         lda     ROMIN1
 
         ;lather, rinse, repeat
+
         jsr     RDCHAR                  ;returns non-zero
         bne     GetKey                  ;always
-}
 InstallEnd
-!if >(InstallEnd - InstallStart) {
-  !error "swap code too large, ends at ", (InstallEnd - InstallStart) - $100, " bytes too many"
+  !if (InstallEnd > JmpInstall) {
+    !error "page 2 swap-code too large, ", InstallEnd - JmpInstall, " bytes too many"
+  } else {
+    !if (InstallEnd < JmpInstall) {
+      !error "INSTALLBUFFER too low, change to ", InstallStart + JmpInstall - InstallEnd
+    }
+  }
 }
 
         ;editor code is an overlay that is loaded by install routine above
@@ -435,32 +479,32 @@ RunFromBankedRAM
         jsr     ScrollEditBufferIn      ;returns Y=FF
 
         ;do the thing
+
         iny
-        sty     IsDirty + 1             ;0=false, non-0=true
+        sty     WriteIfDirty2 + 1       ;0=false, non-0=true
 
         ;do the thing
+
         jsr     EditorMode
 
         ;scroll the edit buffer out and the original screen back in
+
         jsr     ScrollEditBufferOut
 
         ;save to disk (if necessary)
-IsDirty
-        lda     #"Q"                    ;self-modified
-        beq     +
 
-        ;save to disk
-        jsr     SaveFile
+        jsr     WriteIfDirty1
 
-+       pla
+        pla
         tax
         rts
 
 ScrollEditBufferIn
-        ldy     #(<(ScrollParms2 - ScrollParms1) - 1)
-        jsr     SetScrollLines
+        ldy     #(<(ScrollParmsDown - ScrollParms) - 1)
+        jsr     SetScrollLine
 
         ;copy last line on screen to temporary buffer
+
 --      ldy     #(WIDTH - 1)
 -       lda     $07D0, y
         sta     (OPSRC1L), y
@@ -468,18 +512,15 @@ ScrollEditBufferIn
         bpl     -
 
         ;copy each line on screen down to next line (leaves top line untouched)
+
         jsr     ScrollTextScreenDown
 
         ;copy last line of edit buffer to top line on screen
+
         ldy     #(WIDTH - 1)
 -       lda     (OPDST1L), y
-CharMap2
-        cmp     #0                      ;self-modified
-        bcs     +
-        cmp     #"a"
-        bcc     +
-        and     #$DF
-+       sta     $0400, y
+        jsr     CharMap2
+        sta     $0400, y
         dey
         bpl     -
 
@@ -488,15 +529,56 @@ CharMap2
 
         lda     #-WIDTH
         ldy     #$FF
-        jsr     UpdateVirtualOff        ;returns zr/nz state of SCROLLLINE
+        jsr     UpdateVirtualOff        ;returns Z/NZ state of SCROLLLINE
         bne     --
+
+        ;display current/total page numbering
+        ;99 pages should be enough for everyone
+
+PrintPage
+        ldx     #(HEIGHT - 1)
+        jsr     SetTextCalc
+        ldy     #4
+        ldx     Pages + 1
+        inx
+        jsr     HexToDec
+        lda     #"/"
+        sta     (OPSRC2L), y
+        dey
+        ldx     CurPage + 1
+        inx
+
+HexToDec                                ;called with X=hex value to print
+        txa
+        ldx     #0
+-       cmp     #$0A
+        bcc     +
+        sbc     #9
+        inx
+        bne     -
++       jsr     AToScr
+        txa
+
+AToScr                                ;called with A=dec value to print
+        ora     #"0"
+        sta     (OPSRC2L), y
+        dey
         rts
 
+CharMap2
+        cmp     #0                      ;self-modified in Apple II+ environment
+        bcs     +
+        cmp     #"a"
+        bcc     +
+        and     #$DF
++       rts
+
 ScrollEditBufferOut
-        ldy     #((<(ScrollParms2 - ScrollParms1) * 2) - 1)
-        jsr     SetScrollLines
+        ldy     #(<(ScrollParmsUp - ScrollParms) - 1)
+        jsr     SetScrollLine
 
         ;copy first line on screen to temporary buffer
+
 --      ldy     #(WIDTH - 1)
 -       lda     $0400, y
         sta     (OPSRC1L), y
@@ -504,9 +586,11 @@ ScrollEditBufferOut
         bpl     -
 
         ;copy each line on screen up to next line (leaves bottom line untouched)
+
         jsr     ScrollTextScreenUp
 
         ;copy first line of edit buffer to last line on screen
+
         ldy     #(WIDTH - 1)
 -       lda     (OPDST1L), y
         sta     $07D0, y
@@ -518,24 +602,26 @@ ScrollEditBufferOut
 
         tay
         lda     #WIDTH
-        jsr     UpdateVirtualOff        ;returns zr/nz state of SCROLLLINE
+        jsr     UpdateVirtualOff        ;returns Z/NZ state of SCROLLLINE
         bne     --
         rts
 
-SetScrollLines
+SetScrollLine                           ;called with Y=offset of scroll parameter
+        lda     #HEIGHT
+        sta     SCROLLLINE
+
+SetScrollParms                          ;called with Y=offset of scroll parameter
         ldx     #3
--       lda     ScrollParms1, y
+-       lda     ScrollParms, y
         sta     OPSRC1L, x
         dey
         dex
         bpl     -
-        lda     #HEIGHT
-        sta     SCROLLLINE
         rts
 
-UpdateVirtualOff
         ;set up copy addresses for next line
 
+UpdateVirtualOff                        ;called with A=delta to apply to offsets
         ldx     #2
 -       pha
         clc
@@ -558,12 +644,12 @@ ScrollTextScreenDown
         sta     OPDST2L
         lda     TextCalcHi+1, x
         sta     OPDST2H
-        jsr     CopyLine
+        jsr     CopyRow
         dex
         bpl     -
         rts
 
-SetTextCalc
+SetTextCalc                             ;called with X=line number to resolve
         lda     TextCalcLo, x
         sta     OPSRC2L
         lda     TextCalcHi, x
@@ -571,7 +657,7 @@ SetTextCalc
         rts
 
 ScrollTextScreenUp
-        ldx     #(1 - HEIGHT)
+        ldx     #(1 - HEIGHT)           ;negative indexing to avoid a compare
 -       lda     (TextCalcLo + HEIGHT - $101) +1, x
         sta     OPSRC2L
         lda     TextCalcLo + HEIGHT - $101, x
@@ -580,12 +666,12 @@ ScrollTextScreenUp
         sta     OPSRC2H
         lda     TextCalcHi + HEIGHT - $101, x
         sta     OPDST2H
-        jsr     CopyLine
+        jsr     CopyRow
         inx
         bne     -
         rts
 
-CopyLine
+CopyRow
         ldy     #(WIDTH - 1)
 -       lda     (OPSRC2L), y
         sta     (OPDST2L), y
@@ -606,36 +692,6 @@ MyWAIT
         bne     --
         rts
 
-MyCOUT
-MyCH
-        ldx     #"Q"                    ;self-modified
-
-ScreenBuff4
-        sta     $34f3, x                ;self-modified
-        inx
-        cpx     #WIDTH
-        bne     ++
-        ldx     #0
-MyCV
-        ldy     #"Q"                    ;self-modified
-        iny
-        cpy     #(HEIGHT - 1)
-        bne     MyBASCALC
-        ldy     #0
-
-MyBASCALC
-        sty     MyCV + 1
-        lda     TextCalcLo, y
-        sta     ScreenBuff2 + 1
-        sta     ScreenBuff3 + 1
-        sta     ScreenBuff4 + 1
-        lda     TextCalcHi, y
-        sta     ScreenBuff2 + 2
-        sta     ScreenBuff3 + 2
-        sta     ScreenBuff4 + 2
-++      stx     MyCH + 1
-        rts
-
 MyKEYIN
         ldx     MyCH + 1
 
@@ -643,12 +699,12 @@ ScreenBuff2
         lda     $34f3, x                ;self-modified
         sta     ToggleChar + 1
 
-        ;detect Apple II+ cursor sitting on inverse space
-        ;and replace with normal space so it remains visible
-        ;no inverse alternative for Apple IIe cursor
+        ;since we flash the cursor manually by toggling with an inverse space,
+        ;detect if cursor is over an inverse space and use normal space instead
+        ;otherwise cursor won't be visible
 
 CharDel
-        ldy     #DELETE                 ;self-modified
+        ldy     #DELETE                 ;self-modified to INVSPACE in Apple II+ environment
         bmi     +
         cmp     #INVSPACE
         bne     +
@@ -696,28 +752,39 @@ EditorMode
         ldy     DispatchTableHigh, x
         sty     DispatchCommand + 2
         dex
-        bmi     SetDirty
+        bmi     +
         cmp     KeyTable_b, x
         bne     -
         cpx     #(IgnoreClear - KeyTable_b)
         bcc     DispatchCommand
-        cpx     #(IgnoreDirty - KeyTable_b)
++       cpx     #(IgnoreDirty - KeyTable_b)
+                                        ;save result in carry
 
 ClearOnFirstKeypress
         ldy     #0                      ;self-modified
         beq     +
         dec     ClearOnFirstKeypress + 1
-        php
-        jsr     ClearScreen             ;preserves A
-        plp
+        php                             ;save carry (don't care about the rest)
+        pha
+        jsr     ClearScreen
+        pla
+        plp                             ;restore carry
 +       bcc     DispatchCommand
-
-SetDirty
-        sta     IsDirty + 1
+        sta     WriteIfDirty2 + 1
 
 DispatchCommand
-        jsr     EditorMode              ;self-modified, one or both bytes depending on routine placement
+        jsr     $34f3                   ;self-modified, currently both bytes
+                                        ;but could be just one if all routines begin in the same page...
         jmp     EditorMode
+
+SetTextCoords1
+        ldx     SaveCH
+        ldy     SaveCV
+
+SetTextCoords2                          ;called with X/Y=horizontal/vertical coords to set
+        stx     MyCH + 1
+        sty     MyCV + 1
+        bpl     MyBASCALC               ;always
 
 _doneEditorMode
         pla
@@ -725,6 +792,24 @@ _doneEditorMode
 
 DispatchReturn
         rts
+
+MyCOUT                                  ;called with A=character to print
+MyCH
+        ldx     #"Q"                    ;self-modified
+
+ScreenBuff4
+        sta     $34f3, x                ;self-modified
+        inx
+        cpx     #WIDTH
+        bne     SetCH
+        ldx     #0
+MyCV
+        ldy     #"Q"                    ;self-modified
+        iny
+        cpy     #(HEIGHT - 1)
+        bne     MyBASCALC
+        dey
+        bne     MyBASCALC               ;always
 
 HandleKeyLineLeft
         dec     MyCH + 1
@@ -749,9 +834,22 @@ HandleKeyLineUp
         ldy     #(HEIGHT - 2)
 
 SetRow
-        sty     MyCV + 1
         ldx     MyCH + 1
-        jmp     MyBASCALC
+
+MyBASCALC                               ;called with Y=line number to resolve
+        sty     MyCV + 1
+        lda     TextCalcLo, y
+        sta     ScreenBuff2 + 1
+        sta     ScreenBuff3 + 1
+        sta     ScreenBuff4 + 1
+        lda     TextCalcHi, y
+        sta     ScreenBuff2 + 2
+        sta     ScreenBuff3 + 2
+        sta     ScreenBuff4 + 2
+
+SetCH
+        stx     MyCH + 1
+        rts
 
 HandleKeyClearScreen
         jsr     ClearScreen
@@ -767,19 +865,22 @@ HandleKeyReturn
 HandleKeyLineDown
         ldy     MyCV + 1
         iny
-        cpy     #(HEIGHT - 1)           ;zero on match
+        cpy     #(HEIGHT - 1)
         bcc     SetRow                  ;not BNE to allow big store use
         ldy     #0
         beq     SetRow                  ;always
 
+        ;clear real screen
+
 ClearScreen                             ; does not clear status line
-        pha
         clc
 
+        ;copy from virtual buffer to real screen
+;;todo: add camera flash and click effect ;-)
 HandleKeyImportScreen                   ;called with carry set
-        lda     #<(LastLine - WIDTH)
+        lda     #<(LoadSaveEnd - WIDTH)
         sta     OPSRC1L
-        lda     #>(LastLine - WIDTH)
+        lda     #>(LoadSaveEnd - WIDTH)
         sta     OPSRC1H
 
         ldx     #(HEIGHT - 2)
@@ -798,42 +899,362 @@ HandleKeyImportScreen                   ;called with carry set
         sta     OPSRC1L
         bcs     +
         dec     OPSRC1H
-        sec
+        sec                             ;maintain carry for ImportScreen path
 +       dex
         bpl     --
-        bcs     +                       ;ImportScreen path
+
+PageReturn
+        rts
+
+        ;write an empty page to disk
+        ;then select that page
+
+HandleKeyAddPage
+        jsr     ExchangeVirtualBuffer
+        sec
+        jsr     ClearVirtualBuffer
+        jsr     OpenDataFile
+        inc     Pages + 1
+        jsr     SetPrevPage             ;returns A=Pages
+        sta     CurPage + 1
+        tax
+        lda     MyCH + 1
+        pha
+        lda     MyCV + 1
+        pha
+        lda     #0
+        sta     MyCH + 1
+        sta     MyCV + 1
+        jsr     SeekReadWrite
         pla
-+       rts
+        sta     MyCV + 1
+        pla
+        sta     MyCH + 1
+        sec
+        php                             ;save carry (don't care about the rest)
+        bcs     +++                     ;always
+
+        ;move to next page if possible
+
+HandleKeyNextPage
+        jsr     SetPrevPage
+
+Pages
+        lda     #0                      ;self-modified
+        beq     PageReturn
+        inc     CurPage + 1
+
+CurPage
+        cmp     #0                      ;self-modified
+        bcs     ++
+
+        ;or wrap to first page
+
+        lda     #0
+        sec
+        bcs     +                       ;always
+
+        ;move to previous page if possible
+
+HandleKeyPrevPage
+        jsr     SetPrevPage             ;returns A=Pages, Z/NZ state of Pages
+        beq     PageReturn
+        clc
+        dec     CurPage + 1
+        bpl     ++
+
+        ;or wrap to last page
+
++       sta     CurPage + 1
+++      php                             ;save carry (don't care about the rest)
+        jsr     ExchangeVirtualBuffer
+
+        ;update header to specify new page count and current page
+
++++     jsr     LoadSaveHeader
+        jsr     CloseFile               ;work around DiversiDOS bug
+        jsr     OpenDataFile            ;by close and reopen to flush the write
+        dec     ReadWriteCmd            ;lda #CMDREAD / sta ReadWriteCmd
+        lda     ReadBuffer
+        pha
+        adc     #WIDTH
+        sta     ReadBuffer
+        lda     ReadBuffer + 1
+        pha
+        adc     #0
+        sta     ReadBuffer + 1
+        ldx     SaveCV
+        jsr     SeekReadWrite
+        pla
+        sta     ReadBuffer + 1
+        pla
+        sta     ReadBuffer
+        inc     ReadWriteCmd            ;lda #CMDWRITE / sta ReadWriteCmd
+        plp                             ;restore carry
+        lda     SaveCH + WIDTH
+        pha
+        lda     SaveCV + WIDTH
+        pha
+
+        bcc     +                       ;the PrevPage path
+
+        jsr     ScrollEditBufferLeft    ;returns Z
+        beq     ++                      ;always
+
++       jsr     ScrollEditBufferRight
+
+++      jsr     WriteIfDirty2
+        ldy     CurPage + 1
+        jsr     PrintPage
+
+        pla
+        tay
+        pla
+        tax
+        jsr     SetTextCoords2
+
+        ;copy virtual buffer to another virtual buffer
+        ;hack existing buffer copy to redirect target,
+        ;since it copies exactly the size that we want
+
+ExchangeVirtualBuffer
+        lda     #>(TEMPBUFFER - <(LoadSaveStart - LastLine))
+        sta     ExchangeBankedPatch + 1
+        clc                             ;enable full path even if not DiversiDOS
+        jsr     ExchangeBanked1 + 1
+        lda     #>(SWAPBUFFER - <(LoadSaveStart - LastLine))
+        sta     ExchangeBankedPatch + 1
+        rts
+
+SetPrevPage
+        lda     CurPage + 1
+        sta     PrevPage + 1
+        lda     Pages + 1
+        rts
 
 HandleKeyHighlight
         ldx     MyCV + 1
         jsr     SetTextCalc
         ldy     #(WIDTH - 1)
 -       lda     (OPSRC2L), y
+
+        ;lowercase to uppercase
+        ;otherwise it's unreadable when inverted
+        ;however, the conversion is not reversible
+
+        cmp     #$E0
+        bcc     +
+        and     #$DF
+
+        ;normal range to control range
+
++       and     #$BF
+
+        ;invert character and print if inverse
+
         eor     #$80
-        sta     (OPSRC2L), y
+        bpl     +
+
+        ;control range to normal range
+
+        cmp     #$A0
+        bcs     +
+        ora     #$40
+
++       sta     (OPSRC2L), y
         dey
         bpl     -
         rts
 
-SaveFile
+ScrollEditBufferLeft                    ;called with carry set
+        lda     #-WIDTH
+        sta     SCROLLLINE
+        ldx     #(WIDTH - 1)
+        ldy     #0
+        lda     #(<(ScrollParmsLeft - ScrollParms) - 1)
+        bcs     +                       ;always
+
+ScrollEditBufferRight                   ;called with carry clear
+        ldx     #0
+        ldy     #(WIDTH - 1)
+        sty     SCROLLLINE
+        lda     #(<(ScrollParmsRight - ScrollParms) - 1)
+
++       sta     ScrollEditPatch1 + 1
+        stx     ScrollEditPatch2 + 1
+
+        ;copy first/last column on screen to stack (no temporary buffer available)
+
+--      php                             ;save carry (don't care about the rest)
+        ldx     #(HEIGHT - 2)
+-       jsr     SetTextCalc
+        lda     (OPSRC2L), y
+        pha
+        dex
+        bpl     -
+        bcc     +                       ;the ScrollRight path
+
+        ;copy each column on screen to previous column
+
+        jsr     ScrollTextScreenLeft    ;returns carry set
+        bcs     ScrollEditPatch1        ;always
+
+        ;copy each column on screen to next column
+
++       jsr     ScrollTextScreenRight   ;maintains carry (clear)
+
+        ;copy first column of edit buffer to last column on screen
+        ;or
+        ;copy last column of edit buffer to first column on screen
+
+ScrollEditPatch1
+        ldy     #"Q"                    ;self-modified
+        jsr     SetScrollParms
+        ldx     #(HEIGHT - 2)
+-       jsr     SetTextCalc
+        ldy     SCROLLLINE
+        lda     (OPSRC1L), y
+        jsr     CharMap2
+ScrollEditPatch2
+        ldy     #"Q"                    ;self-modified
+        sta     (OPSRC2L), y
+        lda     OPSRC1L
+        sec
+        sbc     #WIDTH
+        sta     OPSRC1L
+        bcs     +
+        dec     OPSRC1H
++       dex
+        bpl     -
+
+        ;place saved column in edit buffer
+
+        ldy     SCROLLLINE
+        ldx     #(HEIGHT - 2)
+-       pla
+        sta     (OPDST1L), y
+        lda     OPDST1L
+        clc
+        adc     #WIDTH
+        sta     OPDST1L
+        bcc     +
+        inc     OPDST1H
++       dex
+        bpl     -
+
+        ;animation delay
+
+        jsr     Delay                   ;returns A=0
+        plp                             ;restore carry
+        bcc     +                       ;the ScrollRight path
+        tay
+        inc     SCROLLLINE
+        bne     --
+        rts
+
++       ldy     #(WIDTH - 1)
+        dec     SCROLLLINE
+        bpl     --
+        rts
+
+ScrollTextScreenLeft
+        ldy     #1
+-       lda     #$88                    ;DEY
+        jsr     CopyColumn
+        iny
+        cpy     #WIDTH
+        bne     -
+        rts
+
+ScrollTextScreenRight
+        ldy     #(WIDTH - 2)
+-       lda     #$C8                    ;INY
+        jsr     CopyColumn
+        dey
+        bpl     -
+        rts
+
+CopyColumn                              ;called with A=opcode to specify direction
+        sta     CopyColumnPatch1
+        eor     #$40
+        sta     CopyColumnPatch2
+        ldx     #(HEIGHT - 2)
+-       jsr     SetTextCalc
+        lda     (OPSRC2L), y
+CopyColumnPatch1
+        nop                             ;self-modified to DEY/INY
+        sta     (OPSRC2L), y
+CopyColumnPatch2
+        nop                             ;self-modified to INY/DEY
+        dex
+        bpl     -
+        rts
+
+WriteIfDirty1
+        jsr     SetPrevPage
+
+WriteIfDirty2
+        lda     #"Q"                    ;self-modified
+        beq     OpenReturn
+        lda     #0
+        sta     WriteIfDirty2 + 1
+
+        jsr     OpenDataFile
+
+PrevPage
+        ldx     #0                      ;self-modified
+
+SeekReadWrite                           ;also writes, called with X=page to read/write
+        lda     #<(FirstLine - LoadSaveStart)
+        ldy     #>(FirstLine - LoadSaveStart)
+-       dex
+        bmi     +
+        clc
+        adc     #<(LoadSaveEnd - LoadSaveStart)
+        pha
+        tya
+        adc     #>(LoadSaveEnd - LoadSaveStart)
+        tay
+        pla
+        bcc     -                       ;always
++       sta     WriteOffset             ;also ReadOffset
+        sty     WriteOffset + 1         ;also ReadOffset
+        lda     #<(LoadSaveEnd - LoadSaveStart)
+        sta     WriteSize               ;also ReadSize
+        lda     #>(LoadSaveEnd - LoadSaveStart)
+        sta     WriteSize + 1           ;also ReadSize
         lda     MyCH + 1
         sta     SaveCH
         lda     MyCV + 1
         sta     SaveCV
+        jsr     WriteFile               ;also ReadFile
 
-CreateWriteFile
-        jsr     OpenDataFile
-        bcs     OpenRet
-        jsr     WriteFile
+CloseFile
         jsr     DOSMLI
         !byte   CloseMLI_e - CloseMLI_b
 CloseMLI_b
         !byte   CMDCLOSE
 CloseMLI_e
 
-OpenRet
+OpenReturn
         rts
+
+        ;open the file, load/save the page count and current page
+
+LoadSaveHeader
+        jsr     OpenDataFile
+        bcs     OpenReturn
+        lda     #2
+        sta     WriteSize               ;also ReadSize
+        lda     #0
+        sta     WriteOffset             ;also ReadOffset
+        sta     WriteOffset + 1         ;also ReadOffset
+        sta     WriteSize + 1           ;also ReadSize
+        lda     Pages + 1
+        sta     SaveCH
+        lda     CurPage + 1
+        sta     SaveCV
+        jmp     WriteFile               ;also ReadFile
 
 TextCalcHi
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
@@ -844,56 +1265,102 @@ TextCalcLo
         !byte   $28, $A8, $28, $A8, $28, $A8, $28, $A8
         !byte   $50, $D0, $50, $D0, $50, $D0, $50, $D0
 
-ScrollParms1
+ScrollParms
         !word   LastLine, LastLine - WIDTH
+ScrollParmsDown                         ;meaningful labels for last character instead of first
 
-ScrollParms2
         !word   FirstLine, FirstLine + WIDTH
+ScrollParmsUp
+
+        !byte   <(LoadSaveEnd + WIDTH), >(LoadSaveEnd - <(LoadSaveEnd + WIDTH)), <(FirstLine + WIDTH), >(FirstLine - <(FirstLine + WIDTH))
+ScrollParmsLeft
+
+        !word   LoadSaveEnd, FirstLine
+ScrollParmsRight
 
 KeyTable_b
         !byte   HOTKEY, ESC
-IgnoreClear
-        !byte   LTARROW, DNARROW, UPARROW, RTARROW, RETURN
-IgnoreDirty
+IgnoreClear     ;everything above this line will not clear title screen
+        !byte   LTARROW, DNARROW, UPARROW, RTARROW, RETURN, ADDPAGEKEY, NEXTPAGEKEY, PREVPAGEKEY
+IgnoreDirty     ;everything above this line will not trigger a save on their own
+                ;the page keys will save the previous page if it was dirty
         !byte   IMPORTKEY, CLEARKEY, HIGHLIGHTKEY
 KeyTable_e
 
 DispatchTableLow
-        !byte   <MyCOUT
+        !byte   <MyCOUT                 ;catch-all entry, the rest follow the KeyTable ordering
         !byte   <_doneEditorMode, <_doneEditorMode
-        !byte   <HandleKeyLineLeft, <HandleKeyLineDown, <HandleKeyLineUp, <HandleKeyLineRight, <HandleKeyReturn
+        !byte   <HandleKeyLineLeft, <HandleKeyLineDown, <HandleKeyLineUp, <HandleKeyLineRight, <HandleKeyReturn, <HandleKeyAddPage, <HandleKeyNextPage, <HandleKeyPrevPage
         !byte   <HandleKeyImportScreen, <HandleKeyClearScreen, <HandleKeyHighlight
 
 DispatchTableHigh
-        !byte   >MyCOUT
+        !byte   >MyCOUT                 ;catch-all entry, the rest follow the KeyTable ordering
         !byte   >_doneEditorMode, >_doneEditorMode
-        !byte   >HandleKeyLineLeft, >HandleKeyLineDown, >HandleKeyLineUp, >HandleKeyLineRight, >HandleKeyReturn
+        !byte   >HandleKeyLineLeft, >HandleKeyLineDown, >HandleKeyLineUp, >HandleKeyLineRight, >HandleKeyReturn, >HandleKeyAddPage, >HandleKeyNextPage, >HandleKeyPrevPage
         !byte   >HandleKeyImportScreen, >HandleKeyClearScreen, >HandleKeyHighlight
 
-LoadSaveStart
+LoadSaveStart                           ;replaced by file content if exists
 SaveCH
-        !byte   0                       ;loaded from file if exists
+        !byte   0
 SaveCV
-        !byte   0                       ;loaded from file if exists
+        !byte   0
+
+        ;our screen contains 23 user-defined lines
+        ;the 24th line is reserved for the status bar
+        ;however, we define an extra line for better vertical scrolling performance
+        ;it works like this to scroll down:
+
+        ;the last line on the screen is copied into the extra line in this buffer;
+        ;the screen is scrolled down;
+        ;the last line in the virtual buffer is copied into the first line of the screen;
+        ;the last line on the screen (was the second-last line on the original screen) is copied into the last line in this buffer;
+        ;this copy overwrites the line in the virtual buffer that was just copied onto the screen;
+        ;the screen is scrolled down;
+        ;the second-last line in the virtual buffer is copied into the first line of the screen;
+        ;...
+        ;the last line on the screen (was the first line on the original screen) is copied into the second line in this buffer;
+        ;the screen is scrolled down;
+        ;the first line in the virtual buffer is copied into the first line of the screen;
+
+        ;to scroll up, we reverse the order of the operations
+
+        ;this allows us to copy whole lines without duplicating the entire screen or performing a content exchange
+        ;...in case you were wondering...
+
+        ;sigh, but it also introduces a problem with multi-screen support...
+        ;which is that we load directly from file into this buffer but it requires that we load to the second line,
+        ;instead of the first line, which was not the plan originally
+        ;if only we had decided to scroll in the other way...
+        ;is the design flaw in the scrolling or the reading?  you decide.
 
 FirstLine                               ;lines are stored sequentially, not like text page in memory
-        !fill   WIDTH * 8, $A0
+        !fill   WIDTH, $A0
+
+SecondLine
+  !if >SecondLine != >LoadSaveStart {
+    !error "first two lines of text buffer must not cross a page"
+  }
+        !fill   WIDTH * 7, $A0
         !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, $A0
-        !text   "   Revision 03 / Serial number 161117   "
+        !text   "   Revision 03 / Serial number 161123   "
         !fill   WIDTH * 2, $A0
         !text   "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, $A0
 
 LoadSaveEnd
-        ;in the current version, the status line is not saved
-        ;however, when we move to multi-screen support,
-        ;both the status line and the spill line must be saved
-        ;for scrolling to work properly
         !fill   (WIDTH - 5), $20
         !text   "4LIVE"
 
 LastLine
         !fill   WIDTH, $A0
+
+TEMPBUFFER=(*+255) and not 255
+  !if (TEMPBUFFER>$DC00) {
+    !error "banked code is too large, ends at ", *, ", ", *-$DC00, " bytes too many"
+  }
+  !if VERBOSE=1 {
+    !warn "banked code end=", *, ", data end=", TEMPBUFFER+$3FF, ", bytes free=", $DC00-*
+  }
 }
 BankedCopyEnd
