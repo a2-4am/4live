@@ -553,7 +553,7 @@ HexToDec                                ;called with X=hex value to print
         ldx     #0
 -       cmp     #$0A
         bcc     +
-        sbc     #9
+        sbc     #$0A
         inx
         bne     -
 +       jsr     AToScr
@@ -910,6 +910,9 @@ PageReturn
         ;then select that page
 
 HandleKeyAddPage
+        lda     Pages + 1
+        cmp     #(99 - 1)               ;maximum 99 pages
+        beq     PageReturn
         jsr     ExchangeVirtualBuffer
         sec
         jsr     ClearVirtualBuffer
