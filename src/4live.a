@@ -73,7 +73,7 @@
         WIDTH           = 40
         HEIGHT          = 24
         LDRBASE         = $2E0
-        INSTALLBUFFER   = $23C          ; yes, the overlay overwrites the loader...
+        INSTALLBUFFER   = $239          ; yes, the overlay overwrites the loader...
                                         ; see also "warning!" below
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by DiversiDOS, must be page-aligned
@@ -354,6 +354,7 @@ InstallStart
         ;set to true if no data file found (carry is set)
 
         rol     ClearOnFirstKeypress + 1
+        rol     EnableAddPage + 1
 
         jsr     SetTextCoords1
 
@@ -455,7 +456,7 @@ GetKey
         bne     GetKey                  ;always
 InstallEnd
   !if (InstallEnd > JmpInstall) {
-    !error "page 2 swap-code too large, ", InstallEnd - JmpInstall, " bytes too many"
+      !error "INSTALLBUFFER too large, change to ", InstallStart + JmpInstall - InstallEnd
   } else {
     !if (InstallEnd < JmpInstall) {
       !error "INSTALLBUFFER too low, change to ", InstallStart + JmpInstall - InstallEnd
@@ -771,6 +772,7 @@ ClearOnFirstKeypress
         plp                             ;restore carry
 +       bcc     DispatchCommand
         sta     WriteIfDirty2 + 1
+        sta     EnableAddPage + 1
 
 DispatchCommand
         jsr     $34f3                   ;self-modified, currently both bytes
@@ -910,6 +912,9 @@ PageReturn
         ;then select that page
 
 HandleKeyAddPage
+EnableAddPage
+        lda     #0                      ;self-modified
+        beq     PageReturn              ;no add until page 1 is written to disk
         lda     Pages + 1
         cmp     #(99 - 1)               ;maximum 99 pages
         beq     PageReturn
