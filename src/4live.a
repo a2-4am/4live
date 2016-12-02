@@ -72,19 +72,22 @@
         POSRDWRRANGE    = 4
         WIDTH           = 40
         HEIGHT          = 24
-        LDRBASE         = $2E0
-        INSTALLBUFFER   = $239          ; yes, the overlay overwrites the loader...
+        LDRBASE         = $2E9
+        INSTALLBUFFER   = $23B          ; yes, the overlay overwrites the loader...
                                         ; see also "warning!" below
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
-                                        ; needed by DiversiDOS, must be page-aligned
+                                        ; needed by Diversi-DOS, must be page-aligned
                                         ; region is preserved across calls
+                                        ; do not set below $900 if *size* of buffer is not page-aligned
+        SWAPSIZEALIGNED = 0             ; set to 1 if (LoadSaveEnd - LoadSaveStart) size is page-aligned
+                                        ; an aligned size reduces code size by a bit but increases memory usage by a lot
 
 *=LDRBASE-4
 LdrHeader
         !word   LDRBASE, LdrEnd - LdrStart
 
         ;loader loads to pages 2-3, loads discardable install code also to pages 2-3
-        ;and carries proxy routines including file manager and banked RAM exchange for DiversiDOS
+        ;and carries proxy routines including file manager and banked RAM exchange for Diversi-DOS
 
 LdrStart
         ;set filename pointer in MLI request packet
@@ -228,22 +231,14 @@ BankInRAM1
         bit     LCBANK1
         rts
 
-        ;write size must be one less than required value because of course it must
-
-WriteFile
-        lda     ReadWriteCmd
-        lsr                             ;read has bit 0 set, write does not
-        bcs     ReadFile
-
-;;we are not now writing any page-aligned sizes
-;;        lda     WriteSize
-;;        bne     +
-;;        dec     WriteSize + 1
-;;+
-        dec     WriteSize
+        ;read file content into memory
+        ;with swapping of the memory contents in Diversi-DOS,
+        ;in order to preserve the original memory region
 
 ReadFile
         jsr     ExchangeBanked1
+ReadFileNoXchg
+WriteFile
         jsr     DOSMLI
         !byte   ReadMLI_e - ReadMLI_b
 ReadMLI_b
@@ -262,16 +257,16 @@ WriteSize
 
 ReadBuffer
 WriteBuffer
-        !word   LoadSaveStart           ;buffer, self-modified in DiversiDOS
+        !word   LoadSaveStart           ;buffer, self-modified in Diversi-DOS
 ReadMLI_e
         ;fall through to ExchangeBanked1
 
-        ;swap banked dynamic region with spare region also in banked memory
-        ;call again to restore the banked dynamic region
+        ;swap banked memory region with main memory region
+        ;call again to restore the main memory region
         ;sorry, I couldn't find a simpler way...
 
 ExchangeBanked1
-        rts                             ;self-modified to CLC in DiversiDOS environment
+        rts                             ;self-modified to CLC in Diversi-DOS environment
 
         ;fill banked dynamic region with spaces
 
@@ -283,6 +278,8 @@ ClearVirtualBuffer                      ;called with carry set
         lda     #<(LastLine - LoadSaveStart)
         sta     OPSRC1L
         lda     #<LastLine
+
+        ;can also swap banked dynamic region with spare region also in banked memory
 
 ExchangeBankedSet                       ;called with A=buffer offset, carry clear
         sta     OPDST1L
@@ -307,7 +304,7 @@ ExchangeBankedPatch
         rts
 LdrEnd
 !if (LdrEnd > $3D0) {
-  !error "page 3 swap-code too large, ", LdrEnd - $3D0, " bytes too many"
+    !error "LDRBASE too high, change to ", LdrStart + $3D0 - LdrEnd
 } else {
   !if (LdrEnd < $3D0) {
     !error "LDRBASE too low, change to ", LdrStart + $3D0 - LdrEnd
@@ -316,22 +313,23 @@ LdrEnd
 
         ;install routine is an overlay that is loaded by loader routine above
         ;loads editor code and data file into banked RAM either directly for DOS 3.3
-        ;or via RAM exchange for DiversiDOS
+        ;or via RAM exchange for Diversi-DOS
 
 !pseudopc INSTALLBUFFER {
 InstallStart
-        ;check for DiversiDOS
+        ;check for Diversi-DOS
 
         pla
         eor     #$BF
+        pha
         bne     +                       ;regular DOS
         sta     ReadBuffer
         lda     #>SWAPBUFFER
         sta     ReadBuffer + 1
         sta     InstallReadBuffer + 1
         lda     #$18                    ;CLC
-        sta     ExchangeBanked1
         sta     ExchangeBanked2
+        sta     ExchangeBanked1
 +
         ;enable reading directly into banked RAM
 
@@ -340,7 +338,11 @@ InstallStart
         ;read second overlay to banked RAM
 
         jsr     ReadEditor
-
+        pla
+        bne     +
+        lda     #$90
+        sta     PatchDiversi
++
         ;open source file and read header if available
 
         jsr     LoadSaveHeader
@@ -354,7 +356,7 @@ InstallStart
         ;set to true if no data file found (carry is set)
 
         rol     ClearOnFirstKeypress + 1
-        rol     EnableAddPage + 1
+        rol     PreventAddPage + 1      ;tri-state flag because Diversi-DOS
 
         jsr     SetTextCoords1
 
@@ -372,7 +374,7 @@ InstallStart
         beq     +
         lda     #INVSPACE
         sta     CharDel + 1
-        lda     #("z" + 1)
+        lda     #$DF
         sta     CharMap1 + 1
         sta     CharMap2 + 1
 +
@@ -380,25 +382,22 @@ InstallStart
 
         ldy     #0
         beq     ++
-CharMap1
-        cmp     #0                      ;self-modified in Apple II+ environment
-        bcs     +
-        cmp     #"a"
+-       cmp     #$E0
         bcc     +
-        and     #$DF
+CharMap1
+        and     #$FF                    ;self-modified in Apple II+ environment
 +       jsr     COUT
 ++      iny
         lda     _WelcomeMessage-1,y
-        bne     CharMap1
-;;warning!  takes advantage of the fact that the hook is at $300!
-;;but this cannot be detected as assemble time because of the forward reference
-;;  !if <GlobalKeyboardHook {
-;;        lda     #<GlobalKeyboardHook
-;;  }
+        bne     -
+        lda     #<GlobalKeyboardHook
         sta     KSWL
         lda     #>GlobalKeyboardHook
         sta     KSWH
         jmp     WARMDOS                 ;DOS will reconnect the vector itself
+
+        ;read the main code into banked RAM
+        ;uses the memory swapping technique in Diversi-DOS
 
 ReadEditor
         jsr     ExchangeBanked2
@@ -417,10 +416,10 @@ InstallReadMLI_b
 InstallReadBuffer
         !word   $D000                   ;buffer
 InstallReadMLI_e
-        ;fall through to ExchangeBanked2
+        ;fall through to restore buffer
 
 ExchangeBanked2
-        rts                             ;self-modified to CLC (for compatibility) in DiversiDOS environment
+        rts                             ;self-modified to CLC (for compatibility) in Diversi-DOS environment
         lda     #>($D000 - <(BankedCopyStart - BankedCopyEnd))
         sta     OPDST1H
         ldx     #>(BankedCopyEnd - BankedCopyStart)
@@ -477,11 +476,12 @@ RunFromBankedRAM
 
         ;first, scroll the edit buffer onto the screen
         ;(this also swaps the current screen contents out so we can restore it later)
+
         jsr     ScrollEditBufferIn      ;returns Y=FF
 
         ;do the thing
 
-        iny
+        iny                             ;Y=0
         sty     WriteIfDirty2 + 1       ;0=false, non-0=true
 
         ;do the thing
@@ -520,12 +520,13 @@ ScrollEditBufferIn
 
         ldy     #(WIDTH - 1)
 -       lda     (OPDST1L), y
-        jsr     CharMap2
+        jsr     MapCase
         sta     $0400, y
         dey
         bpl     -
 
         ;animation delay
+
         jsr     Delay
 
         lda     #-WIDTH
@@ -566,12 +567,11 @@ AToScr                                ;called with A=dec value to print
         dey
         rts
 
-CharMap2
-        cmp     #0                      ;self-modified in Apple II+ environment
-        bcs     +
-        cmp     #"a"
+MapCase
+        cmp     #$E0
         bcc     +
-        and     #$DF
+CharMap2
+        and     #$FF                    ;self-modified in Apple II+ environment
 +       rts
 
 ScrollEditBufferOut
@@ -599,6 +599,7 @@ ScrollEditBufferOut
         bpl     -
 
         ;animation delay
+
         jsr     Delay                   ;returns A=0
 
         tay
@@ -683,6 +684,8 @@ CopyRow
 Delay
         lda     #1
 
+        ;straight from ROM
+
 MyWAIT
         sec
 --      pha
@@ -695,6 +698,8 @@ MyWAIT
 
 MyKEYIN
         ldx     MyCH + 1
+
+        ;fetch the character at the current cursor position
 
 ScreenBuff2
         lda     $34f3, x                ;self-modified
@@ -761,18 +766,21 @@ EditorMode
 +       cpx     #(IgnoreDirty - KeyTable_b)
                                         ;save result in carry
 
+        ;the first keypress that clears the screen is also a trigger that the first page is dirty
+        ;we require this trigger to allow us to work around a bug in Diversi-DOS
+
 ClearOnFirstKeypress
         ldy     #0                      ;self-modified
         beq     +
         dec     ClearOnFirstKeypress + 1
         php                             ;save carry (don't care about the rest)
         pha
-        jsr     ClearScreen
+        jsr     ClearScreen             ;returns Y=FF
+        sty     PreventAddPage + 1      ;trigger first write
         pla
         plp                             ;restore carry
 +       bcc     DispatchCommand
-        sta     WriteIfDirty2 + 1
-        sta     EnableAddPage + 1
+        sta     WriteIfDirty2 + 1       ;remember if page was modified in the general case
 
 DispatchCommand
         jsr     $34f3                   ;self-modified, currently both bytes
@@ -807,16 +815,16 @@ ScreenBuff4
         ldx     #0
 MyCV
         ldy     #"Q"                    ;self-modified
-        iny
+        iny                             ;move to next line on horizontal typed wraparound
         cpy     #(HEIGHT - 1)
         bne     MyBASCALC
-        dey
-        bne     MyBASCALC               ;always
+        ldy     #0                      ;move to top left on vertical typed wraparound
+        beq     MyBASCALC               ;always
 
 HandleKeyLineLeft
         dec     MyCH + 1
         bpl     DispatchReturn
-        lda     #(WIDTH - 1)
+        lda     #(WIDTH - 1)            ;wrap to same line on horizontal arrow wraparound
 
 SetColumn
         sta     MyCH + 1
@@ -827,7 +835,7 @@ HandleKeyLineRight
         lda     MyCH + 1
         eor     #WIDTH                  ;zero on match
         bne     DispatchReturn
-        beq     SetColumn               ;always
+        beq     SetColumn               ;always, wrap to same line on horizontal arrow wraparound
 
 HandleKeyLineUp
         ldy     MyCV + 1
@@ -861,7 +869,7 @@ HandleKeyClearScreen
 
 HandleKeyReturn
         lda     #0
-        sta     MyCH + 1
+        sta     MyCH + 1                ;move to left of next line on return
         ;fall through
 
 HandleKeyLineDown
@@ -888,7 +896,7 @@ HandleKeyImportScreen                   ;called with carry set
         ldx     #(HEIGHT - 2)
 --      jsr     SetTextCalc
         ldy     #(WIDTH - 1)
-        lda     #$A0
+        lda     #SPACE
 -       bcc     +                       ;ClearScreen path
         lda     (OPSRC1L), y
 +       sta     (OPSRC2L), y
@@ -912,10 +920,26 @@ PageReturn
         ;then select that page
 
 HandleKeyAddPage
-EnableAddPage
+PreventAddPage
         lda     #0                      ;self-modified
-        beq     PageReturn              ;no add until page 1 is written to disk
-        lda     Pages + 1
+        beq     +                       ;page 1 exists already, go directly to add
+        bpl     PageReturn              ;page 1 doesn't exist and nothing to write
+
+        ;Diversi-DOS (not DOS 3.3) has a critical bug when writing to a newly-created file
+        ;if the first write occurs beyond the first sector, then no preceding entries are created in the TS list!
+        ;instead, it leaves the entries blank, causing read errors when attempting to read earlier content
+        ;the disk space is also not reclaimed when deleting the file because the TS list looks empty
+        ;to work around this, we detect when we are writing to the file for the first time,
+        ;and just force the write to occur before the page is added
+         
+        jsr     WriteIfDirty2           ;page 1 is ready to write for the first time
+
+        ;the problem is that the wrong screen was active at the time that we wrote the initial content
+        ;so we have to perform a second write after the screen is scrolled properly
+        ;performance is bad, but fortunately it's a one-time thing
+
+        inc     WriteIfDirty2 + 1       ;force it to write again
++       lda     Pages + 1
         cmp     #(99 - 1)               ;maximum 99 pages
         beq     PageReturn
         jsr     ExchangeVirtualBuffer
@@ -980,8 +1004,14 @@ HandleKeyPrevPage
         ;update header to specify new page count and current page
 
 +++     jsr     LoadSaveHeader
-        jsr     CloseFile               ;work around DiversiDOS bug
-        jsr     OpenDataFile            ;by close and reopen to flush the write
+
+        ;Diversi-DOS has a critical bug when reading from a just-written sector
+        ;IT RETURNS THE ORIGINAL DATA UNLESS YOU CLOSE THE FILE AND RE-OPEN IT
+        ;so that's what we do
+
+        jsr     CloseFile
+        jsr     OpenDataFile
+
         dec     ReadWriteCmd            ;lda #CMDREAD / sta ReadWriteCmd
         lda     ReadBuffer
         pha
@@ -1021,6 +1051,8 @@ HandleKeyPrevPage
         tax
         jsr     SetTextCoords2
 
+        ;fall through to restore buffer
+
         ;copy virtual buffer to another virtual buffer
         ;hack existing buffer copy to redirect target,
         ;since it copies exactly the size that we want
@@ -1028,7 +1060,7 @@ HandleKeyPrevPage
 ExchangeVirtualBuffer
         lda     #>(TEMPBUFFER - <(LoadSaveStart - LastLine))
         sta     ExchangeBankedPatch + 1
-        clc                             ;enable full path even if not DiversiDOS
+        clc                             ;enable full path even if not Diversi-DOS
         jsr     ExchangeBanked1 + 1
         lda     #>(SWAPBUFFER - <(LoadSaveStart - LastLine))
         sta     ExchangeBankedPatch + 1
@@ -1039,6 +1071,8 @@ SetPrevPage
         sta     PrevPage + 1
         lda     Pages + 1
         rts
+
+        ;turn everything to inverse or normal
 
 HandleKeyHighlight
         ldx     MyCV + 1
@@ -1065,7 +1099,7 @@ HandleKeyHighlight
 
         ;control range to normal range
 
-        cmp     #$A0
+        cmp     #SPACE
         bcs     +
         ora     #$40
 
@@ -1235,7 +1269,7 @@ SeekReadWrite                           ;also writes, called with X=page to read
         sta     SaveCH
         lda     MyCV + 1
         sta     SaveCV
-        jsr     WriteFile               ;also ReadFile
+        jsr     WriteFileBuff           ;also used by ReadFile
 
 CloseFile
         jsr     DOSMLI
@@ -1248,6 +1282,7 @@ OpenReturn
         rts
 
         ;open the file, load/save the page count and current page
+        ;leaves the file open for additional accesses
 
 LoadSaveHeader
         jsr     OpenDataFile
@@ -1262,7 +1297,123 @@ LoadSaveHeader
         sta     SaveCH
         lda     CurPage + 1
         sta     SaveCV
+
+WriteFileBuff
+        lda     ReadWriteCmd
+        lsr                             ;read has bit 0 set, write does not
+        bcs     JumpFileIO
+
+PatchDiversi
+        bcs     InitDiversiWrite        ;self-modified to BCC if Diversi-DOS
+
+        ;write size must be one less than required value because of course it must
+
+AdjustWriteSize
+        lda     WriteSize
+        bne     +
+        dec     WriteSize + 1
++       dec     WriteSize
+
+JumpFileIO
         jmp     WriteFile               ;also ReadFile
+
+        ;Diversi-DOS (not DOS 3.3) has a critical bug when writing within a sector
+        ;the bug is that it does not read the original sector and then replace the data before writing
+        ;instead, it uses the last-read sector to supply the content to replace!
+        ;to work around this, we detect when we are writing within a sector
+        ;that can be either the write offset is non-zero, and/or the low size is non-zero
+        ;in either case, we perform as expected: read the original sector, replace the content, write the sector
+
+InitDiversiWrite
+        jsr     ExchangeSectorBuffer
+        lda     WriteSize
+        sta     WriteSizeLow + 1
+        lda     WriteSize + 1
+        sta     WriteSizeHigh + 1
+        lda     WriteOffset
+        sta     DiversiWriteBuffer + 1
+!if SWAPSIZEALIGNED=0 {
+        dec     WriteBuffer + 1
+}
+        lda     #<LoadSaveStart
+        sta     DiversiReadBuffer + 1
+        lda     #>LoadSaveStart
+        sta     DiversiReadBuffer + 2
+
+        ;disable swapping temporarily
+
+        lda     #$60                    ;RTS
+        sta     ExchangeBanked1
+
+        ;read the existing sector
+
+FixDiversiWrite
+        ldx     #0
+        stx     ReadSize
+        stx     ReadOffset
+        inx
+        stx     ReadSize + 1
+        dec     ReadWriteCmd            ;lda #CMDREAD / sta ReadWriteCmd
+        jsr     ReadFileNoXchg
+        inc     ReadWriteCmd            ;lda #CMDWRITE / sta ReadWriteCmd
+
+        ;replace existing content
+        ;slow copy operation, but it works
+
+DiversiReadBuffer
+        lda     $34f3                   ;self-modified
+        inc     DiversiReadBuffer + 1
+        bne     DiversiWriteBuffer
+        inc     DiversiReadBuffer + 2
+
+DiversiWriteBuffer
+        sta     (SWAPBUFFER - <(LoadSaveStart - LastLine)) and $FF00
+                                        ;low byte is self-modified
+        ldx     WriteSizeLow + 1
+        bne     +
+        dec     WriteSizeHigh + 1
++       dex
+        stx     WriteSizeLow + 1
+        txa
+        ora     WriteSizeHigh + 1
+        beq     +
+        inc     DiversiWriteBuffer + 1
+        bne     DiversiReadBuffer
+
+        ;reaching this path means that we copy an entire sector on next pass
+        ;but it happens only twice currently, which seems to be acceptable
+        ;and it reduces the complexity of the code
++
+        ;write new sector
+
+        jsr     AdjustWriteSize
+        inc     WriteOffset + 1
+
+WriteSizeLow
+        lda     #"Q"                    ;self-modified
+
+WriteSizeHigh
+        ora     #"Q"                    ;self-modified
+        bne     FixDiversiWrite
+
+        ;re-enable swapping
+
+!if SWAPSIZEALIGNED=0 {
+        inc     WriteBuffer + 1
+}
+        lda     #$18                    ;CLC
+        sta     ExchangeBanked1
+
+        ;fall through to restore buffer
+
+ExchangeSectorBuffer
+        lda     #>SECTORBUFFER
+        sta     OPDST1H
+        lda     #0
+        tax
+        tay
+        sta     OPSRC1L
+        jmp     ExchangeBankedSet
 
 TextCalcHi
         !byte   $04, $04, $05, $05, $06, $06, $07, $07
@@ -1342,33 +1493,34 @@ SaveCV
         ;is the design flaw in the scrolling or the reading?  you decide.
 
 FirstLine                               ;lines are stored sequentially, not like text page in memory
-        !fill   WIDTH, $A0
+        !fill   WIDTH, SPACE
 
 SecondLine
   !if >SecondLine != >LoadSaveStart {
     !error "first two lines of text buffer must not cross a page"
   }
-        !fill   WIDTH * 7, $A0
+        !fill   WIDTH * 7, SPACE
         !text   "         4LIVE by 4am && qkumba         "
-        !fill   WIDTH, $A0
+        !fill   WIDTH, SPACE
         !text   "   Revision 03 / Serial number 161123   "
-        !fill   WIDTH * 2, $A0
+        !fill   WIDTH * 2, SPACE
         !text   "    https://github.com/a2-4am/4live     "
-        !fill   WIDTH * 9, $A0
+        !fill   WIDTH * 9, SPACE
 
 LoadSaveEnd
         !fill   (WIDTH - 5), $20
         !text   "4LIVE"
 
 LastLine
-        !fill   WIDTH, $A0
+        !fill   WIDTH, SPACE
 
 TEMPBUFFER=(*+255) and not 255
-  !if (TEMPBUFFER>$DC00) {
-    !error "banked code is too large, ends at ", *, ", ", *-$DC00, " bytes too many"
+  !if (TEMPBUFFER>$DB00) {
+    !error "banked code is too large, ends at ", *, ", ", *-$DB00, " bytes too many"
   }
+SECTORBUFFER=TEMPBUFFER+$400
   !if VERBOSE=1 {
-    !warn "banked code end=", *, ", data end=", TEMPBUFFER+$3FF, ", bytes free=", $DC00-*
+    !warn "banked code end=", *, ", data end=", SECTORBUFFER+$FF, ", bytes free=", $DB00-*
   }
 }
 BankedCopyEnd
