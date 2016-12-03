@@ -303,11 +303,13 @@ ExchangeBankedPatch
         bpl     -
         rts
 LdrEnd
-!if (LdrEnd > $3D0) {
-    !error "LDRBASE too high, change to ", LdrStart + $3D0 - LdrEnd
-} else {
-  !if (LdrEnd < $3D0) {
-    !error "LDRBASE too low, change to ", LdrStart + $3D0 - LdrEnd
+!ifdef PASS2 {
+  !if (LdrEnd > $3D0) {
+      !error "LDRBASE too high, change to ", LdrStart + $3D0 - LdrEnd
+  } else {
+    !if (LdrEnd < $3D0) {
+      !error "LDRBASE too low, change to ", LdrStart + $3D0 - LdrEnd
+    }
   }
 }
 
@@ -454,11 +456,15 @@ GetKey
         jsr     RDCHAR                  ;returns non-zero
         bne     GetKey                  ;always
 InstallEnd
-  !if (InstallEnd > JmpInstall) {
-      !error "INSTALLBUFFER too large, change to ", InstallStart + JmpInstall - InstallEnd
-  } else {
-    !if (InstallEnd < JmpInstall) {
-      !error "INSTALLBUFFER too low, change to ", InstallStart + JmpInstall - InstallEnd
+  !ifdef PASS2 {
+    !if (LdrEnd = $3D0) {
+      !if (InstallEnd > JmpInstall) {
+          !error "INSTALLBUFFER too large, change to ", InstallStart + JmpInstall - InstallEnd
+      } else {
+        !if (InstallEnd < JmpInstall) {
+          !error "INSTALLBUFFER too low, change to ", InstallStart + JmpInstall - InstallEnd
+        }
+      }
     }
   }
 }
@@ -1332,7 +1338,7 @@ InitDiversiWrite
         sta     WriteSizeHigh + 1
         lda     WriteOffset
         sta     DiversiWriteBuffer + 1
-!if SWAPSIZEALIGNED=0 {
+!if (SWAPSIZEALIGNED = 0) {
         dec     WriteBuffer + 1
 }
         lda     #<LoadSaveStart
@@ -1398,7 +1404,7 @@ WriteSizeHigh
 
         ;re-enable swapping
 
-!if SWAPSIZEALIGNED=0 {
+!if (SWAPSIZEALIGNED = 0) {
         inc     WriteBuffer + 1
 }
         lda     #$18                    ;CLC
@@ -1496,7 +1502,7 @@ FirstLine                               ;lines are stored sequentially, not like
         !fill   WIDTH, SPACE
 
 SecondLine
-  !if >SecondLine != >LoadSaveStart {
+  !if (>SecondLine != >LoadSaveStart) {
     !error "first two lines of text buffer must not cross a page"
   }
         !fill   WIDTH * 7, SPACE
@@ -1515,12 +1521,19 @@ LastLine
         !fill   WIDTH, SPACE
 
 TEMPBUFFER=(*+255) and not 255
-  !if (TEMPBUFFER>$DB00) {
-    !error "banked code is too large, ends at ", *, ", ", *-$DB00, " bytes too many"
+  !ifdef PASS2 {
+    !if (TEMPBUFFER > $DB00) {
+      !error "banked code is too large, ends at ", *, ", ", *-$DB00, " bytes too many"
+    }
   }
 SECTORBUFFER=TEMPBUFFER+$400
-  !if VERBOSE=1 {
-    !warn "banked code end=", *, ", data end=", SECTORBUFFER+$FF, ", bytes free=", $DB00-*
+  !ifdef PASS2 {
+    !if (VERBOSE = 1) {
+      !warn "banked code end=", *, ", data end=", SECTORBUFFER+$FF, ", bytes free=", $DB00-*
+    }
+  } else {
+    ;define pass-dependent label to reduce output noise
+    !set PASS2 = 1
   }
 }
 BankedCopyEnd
