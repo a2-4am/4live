@@ -1,6 +1,6 @@
 # 4LIVE
 
-4LIVE is a scratchpad for keeping notes while you're working on your Apple II under DOS 3.3. The current version allows you to keep a 40x23 screen of freeform text, accessible at any time that DOS is in memory.
+4LIVE is a scratchpad for keeping notes while you're working on your Apple II under DOS 3.3. The current version ("revision 03") allows you to keep up to 99 separate screens of freeform text, accessible at any time that DOS is in memory.
 
 ## System requirements
 
@@ -10,15 +10,11 @@
 
 ### Memory usage
 
-When you first run 4LIVE, it will load only a small code stub in low memory (in pages 2 and 3, just below the DOS 3.3 vectors). The stub clobbers $800-$8FF in main memory in order to load the rest of the 4LIVE code and your data file directly into $D000 in LC RAM bank 1.
-
-Thereafter, 4LIVE stays resident in page 3 ($310-$3CF) and in LC RAM bank 1 ($D000-$DFFF), but it does not clobber any other region in main memory.
-
-4LIVE never uses LC RAM bank 2 or auxiliary memory.
+When you first run 4LIVE, it will load only a small code stub in low memory, at $023B. This stub will load the rest of 4LIVE directly into LC RAM bank 1. Thereafter, 4LIVE uses $0309-$03CF in main memory and $D000-$DFFF in LC RAM bank 1. 4LIVE never uses LC RAM bank 2, auxiliary memory, or any other region in main memory.
 
 ## For users
 
-Install 4LIVE by typing `BRUN _4LIVE` from the BASIC prompt, or by executing it as the last line of your `HELLO` program.
+Install 4LIVE by typing `BRUN _4LIVE` from the BASIC prompt, or by executing it in your `HELLO` program.
 
 ```10 PRINT CHR$(4);"BRUN _4LIVE"```
 
@@ -29,10 +25,14 @@ Keyboard commands within the 4LIVE editor:
  * `<Ctrl+@>` or `<Esc>` exits the 4LIVE editor.
  * Arrows move freely up, down, left, and right. On an Apple II+, you can use `<Ctrl+K>` and `<Ctrl+J>` in place of up and down arrows.
  * `<Return>` moves the cursor to the beginning of the next line. It does not erase any text on the current line. It will wrap around from the bottom of the screen to the top.
- * `<Ctrl+N>` clears the editor screen.
- * `<Ctrl+I>` imports the "real" text screen you were looking at before you entered the editor (like taking a text screenshot).
+ * `<Ctrl+B>` toggles highlighting of the current line.
+ * `<Ctrl+T>` creates a new 4LIVE screen and switches to it.
+ * `<Ctrl+R>` switches to the previous 4LIVE screen.
+ * `<Ctrl+Y>` switches to the next 4LIVE screen.
+ * `<Ctrl+C>` clears the current 4LIVE screen.
+ * `<Ctrl+^>` imports the "real" text screen you were looking at before you entered the 4LIVE editor (like taking a text screenshot).
 
-4LIVE will automatically save the contents of your scratchpad on exit. It saves to the file `_4LIVE DATA`. You will see this file in the disk catalog.
+4LIVE will automatically save the contents of your screen whenever you switch screens or exit the 4LIVE editor. It saves everything to the file `_4LIVE DATA`. You will see this file in the disk catalog.
 
 ## For developers
 

@@ -1,6 +1,6 @@
 ;
 ; 4LIVE
-; Copyright (c) 2016 by 4am && qkumba
+; Copyright (c) 2016-7 by 4am && qkumba
 ; 100% open source, see LICENSE file
 ;
 !cpu 6502
@@ -1508,7 +1508,7 @@ SecondLine
         !fill   WIDTH * 7, SPACE
         !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, SPACE
-        !text   "   Revision 03 / Serial number 161123   "
+        !text   "   Revision 03 / Serial number 170112   "
         !fill   WIDTH * 2, SPACE
         !text   "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, SPACE
