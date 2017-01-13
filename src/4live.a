@@ -1162,7 +1162,7 @@ ScrollEditPatch1
 -       jsr     SetTextCalc
         ldy     SCROLLLINE
         lda     (OPSRC1L), y
-        jsr     CharMap2
+        jsr     MapCase
 ScrollEditPatch2
         ldy     #"Q"                    ;self-modified
         sta     (OPSRC2L), y
