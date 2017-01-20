@@ -73,7 +73,7 @@
         WIDTH           = 40
         HEIGHT          = 24
         LDRBASE         = $2E9
-        INSTALLBUFFER   = $23B          ; yes, the overlay overwrites the loader...
+        INSTALLBUFFER   = $232          ; yes, the overlay overwrites the loader...
                                         ; see also "warning!" below
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by Diversi-DOS, must be page-aligned
@@ -351,14 +351,15 @@ InstallStart
         bcs     +
         lda     SaveCH
         sta     Pages + 1
+        sta     OrgPages + 1
         ldx     SaveCV
         stx     CurPage + 1
+        stx     OrgPage + 1
         jsr     SeekReadWrite
+        dec     ClearOnFirstKeypress + 1
+        dec     PreventAddPage + 1      ;tri-state flag because Diversi-DOS
+        inc     HeaderExists + 1
 +
-        ;set to true if no data file found (carry is set)
-
-        rol     ClearOnFirstKeypress + 1
-        rol     PreventAddPage + 1      ;tri-state flag because Diversi-DOS
 
         jsr     SetTextCoords1
 
@@ -776,7 +777,7 @@ EditorMode
         ;we require this trigger to allow us to work around a bug in Diversi-DOS
 
 ClearOnFirstKeypress
-        ldy     #0                      ;self-modified
+        ldy     #1                      ;self-modified
         beq     +
         dec     ClearOnFirstKeypress + 1
         php                             ;save carry (don't care about the rest)
@@ -927,7 +928,7 @@ PageReturn
 
 HandleKeyAddPage
 PreventAddPage
-        lda     #0                      ;self-modified
+        lda     #1                      ;self-modified
         beq     +                       ;page 1 exists already, go directly to add
         bpl     PageReturn              ;page 1 doesn't exist and nothing to write
 
@@ -1007,17 +1008,7 @@ HandleKeyPrevPage
 ++      php                             ;save carry (don't care about the rest)
         jsr     ExchangeVirtualBuffer
 
-        ;update header to specify new page count and current page
-
-+++     jsr     LoadSaveHeader
-
-        ;Diversi-DOS has a critical bug when reading from a just-written sector
-        ;IT RETURNS THE ORIGINAL DATA UNLESS YOU CLOSE THE FILE AND RE-OPEN IT
-        ;so that's what we do
-
-        jsr     CloseFile
-        jsr     OpenDataFile
-
++++     jsr     OpenDataFile
         dec     ReadWriteCmd            ;lda #CMDREAD / sta ReadWriteCmd
         lda     ReadBuffer
         pha
@@ -1027,7 +1018,7 @@ HandleKeyPrevPage
         pha
         adc     #0
         sta     ReadBuffer + 1
-        ldx     SaveCV
+        ldx     CurPage + 1
         jsr     SeekReadWrite
         pla
         sta     ReadBuffer + 1
@@ -1240,6 +1231,36 @@ CopyColumnPatch2
 
 WriteIfDirty1
         jsr     SetPrevPage
+
+        ;update header if number of pages changed, or if current page changed
+
+OrgPages
+        cmp     #0                      ;self-modified
+        bne     UpdateHeader
+        lda     CurPage + 1
+OrgPage
+        cmp     #0                      ;self-modified
+        bne     UpdateHeader
+
+        ;or if the page is dirty and we've never written the header before
+
+        lda     WriteIfDirty2 + 1
+        beq     OpenReturn
+
+HeaderExists
+        lda     #0                      ;self-modified
+        bne     WriteIfDirty2
+
+        ;update header to specify new page count and current page
+
+UpdateHeader
+        jsr     LoadSaveHeader
+
+        ;Diversi-DOS has a critical bug when reading from a just-written sector
+        ;IT RETURNS THE ORIGINAL DATA UNLESS YOU CLOSE THE FILE AND RE-OPEN IT
+        ;so that's what we do
+
+        jsr     CloseFile
 
 WriteIfDirty2
         lda     #"Q"                    ;self-modified
@@ -1508,7 +1529,7 @@ SecondLine
         !fill   WIDTH * 7, SPACE
         !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, SPACE
-        !text   "   Revision 03 / Serial number 170112   "
+        !text   "   Revision 03 / Serial number 170120   "
         !fill   WIDTH * 2, SPACE
         !text   "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, SPACE
