@@ -895,9 +895,9 @@ ClearScreen                             ; does not clear status line
         ;copy from virtual buffer to real screen
 ;;todo: add camera flash and click effect ;-)
 HandleKeyImportScreen                   ;called with carry set
-        lda     #<(LoadSaveEnd - WIDTH)
+        lda     #<LoadSaveEnd
         sta     OPSRC1L
-        lda     #>(LoadSaveEnd - WIDTH)
+        lda     #>LoadSaveEnd
         sta     OPSRC1H
 
         ldx     #(HEIGHT - 2)
@@ -962,6 +962,7 @@ PreventAddPage
         lda     MyCV + 1
         pha
         lda     #0
+        sta     PreventAddPage + 1
         sta     MyCH + 1
         sta     MyCV + 1
         jsr     SeekReadWrite
@@ -1180,13 +1181,9 @@ ScrollEditPatch2
         inc     OPDST1H
 +       dex
         bpl     -
-
-        ;animation delay
-
-        jsr     Delay                   ;returns A=0
         plp                             ;restore carry
         bcc     +                       ;the ScrollRight path
-        tay
+        ldy     #0
         inc     SCROLLLINE
         bne     --
         rts
@@ -1529,7 +1526,7 @@ SecondLine
         !fill   WIDTH * 7, SPACE
         !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, SPACE
-        !text   "   Revision 03 / Serial number 170120   "
+        !text   "   Revision 03 / Serial number 170122   "
         !fill   WIDTH * 2, SPACE
         !text   "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, SPACE
