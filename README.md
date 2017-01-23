@@ -10,7 +10,7 @@
 
 ### Memory usage
 
-When you first run 4LIVE, it will load only a small code stub in low memory, at $023B. This stub will load the rest of 4LIVE directly into LC RAM bank 1. Thereafter, 4LIVE uses $0309-$03CF in main memory and $D000-$DFFF in LC RAM bank 1. 4LIVE never uses LC RAM bank 2, auxiliary memory, or any other region in main memory.
+When you first run 4LIVE, it will load only a small code stub in low memory, at $0232. This stub will load the rest of 4LIVE directly into LC RAM bank 1. Thereafter, 4LIVE uses $0309-$03CF in main memory and $D000-$DFFF in LC RAM bank 1. 4LIVE never uses LC RAM bank 2, auxiliary memory, or any other region in main memory.
 
 ## For users
 

@@ -1508,7 +1508,7 @@ SecondLine
         !fill   WIDTH * 7, SPACE
         !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, SPACE
-        !text   "   Revision 03 / Serial number 170112   "
+        !text   "   Revision 04 / Serial number 170123   "
         !fill   WIDTH * 2, SPACE
         !text   "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, SPACE
