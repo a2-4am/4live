@@ -1,6 +1,6 @@
 ;
 ; 4LIVE
-; Copyright (c) 2016-7 by 4am && qkumba
+; Copyright (c) 2016-8 by 4am && qkumba
 ; 100% open source, see LICENSE file
 ;
 !cpu 6502
@@ -8,6 +8,7 @@
 
 ;user-defined
         HOTKEY          = $80           ; CTRL-@
+        FINDKEY         = $86           ; CTRL-F
         HIGHLIGHTKEY    = $82           ; CTRL-B
         CLEARKEY        = $83           ; CTRL-C
         PREVPAGEKEY     = $92           ; CTRL-R
@@ -17,6 +18,7 @@
 
         VERBOSE         = $0            ; set to 1 to show memory usage during build
 ;
+!addr   PROMPT          = $33
 !addr   KSWL            = $38
 !addr   KSWH            = $39
 !addr   FCBFOP          = $40
@@ -30,9 +32,12 @@
 !addr   LCBANK2         = $C083
 !addr   ROMIN1          = $C089
 !addr   LCBANK1         = $C08B
+!addr   SCRN2P2         = $F87B         ;SCRN2 +2
+!addr   PRNTYX          = $F940
 !addr   APLDETECT       = $FBB3         ;#06 if IIe or later
 !addr   KEYIN           = $FD1B
 !addr   RDCHAR          = $FD35
+!addr   CROUT           = $FD8E
 !addr   COUT            = $FDED
 
 ;private arbitrary addresses, shared with DOS to avoid conflict
@@ -58,6 +63,8 @@
         SPACE           = $A0
         DELETE          = $FF
 
+        WILDCARD        = $97
+
         IOBSLOT         = 1
         IOBDRIVE        = 2
         NAMELEN         = 30
@@ -72,8 +79,8 @@
         POSRDWRRANGE    = 4
         WIDTH           = 40
         HEIGHT          = 24
-        LDRBASE         = $2E9
-        INSTALLBUFFER   = $232          ; yes, the overlay overwrites the loader...
+        LDRBASE         = $2DB
+        INSTALLBUFFER   = $21E          ; yes, the overlay overwrites the loader...
                                         ; see also "warning!" below
         SWAPBUFFER      = $900          ; (LoadSaveEnd - LoadSaveStart) size
                                         ; needed by Diversi-DOS, must be page-aligned
@@ -108,12 +115,8 @@ LdrStart
         sta     FileDrive
         dey                             ;ldy #IOBSLOT
         lda     (OPSRC1L), y
-        lsr
-        lsr
-        lsr
-        lsr
+        jsr     SCRN2P2
         sta     FileSlot
-        dey                             ;ldy #00
 
         ;open self and read first overlay
 
@@ -231,6 +234,18 @@ BankInRAM1
         bit     LCBANK1
         rts
 
+PrintAddr
+        bit     ROMIN1
+        jsr     PRNTYX
+
+PrintCR
+        lda     #RETURN
+
+PrintChar
+        bit     ROMIN1
+        jsr     COUT
+        bne     BankInRAM1
+        
         ;read file content into memory
         ;with swapping of the memory contents in Diversi-DOS,
         ;in order to preserve the original memory region
@@ -444,11 +459,19 @@ GetKey
 
         cmp     #HOTKEY
 
+        ;yes -> let's do that
+
+        beq     +
+
+        ;memory search?
+
+        cmp     #FINDKEY
+
         ;no -> return to DOS
 
         bne     ReuseRts
 
-        jsr     BankInRAM1
++       jsr     BankInRAM1
         jsr     RunFromBankedRAM
         lda     ROMIN1
 
@@ -475,6 +498,9 @@ InstallEnd
 BankedCopyStart
 !pseudopc $D000 {
 RunFromBankedRAM
+        cmp     #FINDKEY
+        beq     FindChars
+
         ;preserve X across calls
         ;it's important for DOS
 
@@ -506,6 +532,147 @@ RunFromBankedRAM
         pla
         tax
         rts
+
+FindChars
+        sty     CharCount + 1
+        ldx     #0
+        ldy     #0
+
+ConvertChars
+        cmp     #$10
+        bcs     NextChar
+        asl
+        asl
+        asl
+        asl
+        sta     OPSRC1L
+        jsr     Char2Nib
+        ora     OPSRC1L
+        sta     SECTORBUFFER, y
+        iny
+
+NextChar
+        jsr     Char2Nib
+
+CharCount
+        cpx     #0                      ;self-modified
+        bcc     ConvertChars
+        jsr     PrintCR
+        dex
+        beq     CancelLine
+        jsr     SearchMemory
+
+CancelLine
+        ldx     #0
+        lda     PROMPT
+        tay                             ;in case Y was zero
+        jmp     PrintChar
+
+SearchMemory
+        lda     DOSBASE
+        sta     .endvalue+1
+        lda     #8
+        sta     search+2
+        sty     match_size1+1
+        sty     match_size2+1
+
+; fetch last byte to improve search speed
+
+        dey
+
+match_buffer1
+        lda    SECTORBUFFER,y
+        sta    check_byte1+1
+        sta    check_byte2+1
+
+; set low part of initial search position
+
+        sty    cont_search+1
+
+        lda    #<cont_search-branch_cont-2
+        sta    branch_cont+1
+
+; search...
+
+cont_search
+        ldy    #$d1             ; modified at runtime
+
+search
+        lda    $d100,y          ; modified at runtime
+        iny
+        beq    check_end
+
+check_byte1
+        cmp    #$d1             ; modified at runtime
+        bne    search
+
+; point to first byte
+
+        sty    cont_search+1
+
+check_match
+        tya
+
+match_size1
+        sbc    #$d1             ; modified at runtime
+        sta    match_buffer2+1
+        lda    search+2
+        sbc    #$00
+        sta    match_buffer2+2
+        ldy    #$00
+
+match_all
+        lda    SECTORBUFFER,y
+        cmp    #WILDCARD
+        beq    found_wild
+
+match_buffer2
+        cmp    $d1d1,y          ; modified at runtime
+
+branch_cont
+        bne    cont_search
+
+found_wild
+        iny
+
+match_size2
+        cpy    #$d1             ; modified at runtime
+        bne    match_all
+
+; point to start of match
+
+        ldx    match_buffer2+1
+        ldy    match_buffer2+2
+        jsr    PrintAddr
+        bne    branch_cont
+
+; cold path
+
+check_end
+        inc    search+2
+        ldx    search+2
+.endvalue
+        cpx    #$D1
+        bne    check_byte1
+        ldx    #<all_done_set-branch_cont-2
+        stx    branch_cont+1
+
+check_byte2
+        cmp    #$d1             ; modified at runtime
+        beq    check_match
+
+all_done_set
+        ;fall through
+
+Char2Nib
+        lda     $0200, x
+        inx
+        sec
+        sbc     #$B0
+        cmp     #$0A
+        bcc     +
+        sbc     #7
++       rts
 
 ScrollEditBufferIn
         ldy     #(<(ScrollParmsDown - ScrollParms) - 1)
@@ -568,7 +735,7 @@ HexToDec                                ;called with X=hex value to print
 +       jsr     AToScr
         txa
 
-AToScr                                ;called with A=dec value to print
+AToScr                                  ;called with A=dec value to print
         ora     #"0"
         sta     (OPSRC2L), y
         dey
@@ -1526,7 +1693,7 @@ SecondLine
         !fill   WIDTH * 7, SPACE
         !text   "         4LIVE by 4am && qkumba         "
         !fill   WIDTH, SPACE
-        !text   "   Revision 04 / Serial number 170123   "
+        !text   "   Revision 05 / Serial number 180410   "
         !fill   WIDTH * 2, SPACE
         !text   "    https://github.com/a2-4am/4live     "
         !fill   WIDTH * 9, SPACE
