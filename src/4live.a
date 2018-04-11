@@ -644,6 +644,7 @@ match_size2
         ldx    match_buffer2+1
         ldy    match_buffer2+2
         jsr    PrintAddr
+        tya
         bne    branch_cont
 
 ; cold path
